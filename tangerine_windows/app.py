@@ -1,6 +1,6 @@
 """
 Coordinador principal de la aplicación Tangerine Windows.
-Completamente silencioso (sin notificaciones emergentes).
+Completamente silencioso y conectado con sub-herramientas (Crop, Compress, Collage, etc.).
 """
 from __future__ import annotations
 
@@ -14,22 +14,28 @@ from PySide6.QtWidgets import QApplication
 
 from .convert import convert_files
 from .radial import RadialMenu
+from .tools_ui import (
+    CropImageDialog,
+    execute_collage,
+    execute_compress,
+    execute_create_pdf,
+    execute_metadata_strip,
+)
 from .tray import TangerineTray
 from .trigger import DragShiftWatcher
 
 
-class ConversionTask(QRunnable):
-    def __init__(self, paths: List[str], target_format: str):
+class ActionTask(QRunnable):
+    def __init__(self, action_fn, *args):
         super().__init__()
-        self.paths = paths
-        self.target_format = target_format
+        self.action_fn = action_fn
+        self.args = args
 
     def run(self):
         try:
-            # Conversión en segundo plano de alta velocidad
-            convert_files(self.paths, self.target_format)
+            self.action_fn(*self.args)
         except Exception as e:
-            print(f"[Tangerine Error] Falló la conversión: {e}", file=sys.stderr)
+            print(f"[Tangerine Error]: {e}", file=sys.stderr)
 
 
 class TangerineApp(QObject):
@@ -40,8 +46,9 @@ class TangerineApp(QObject):
         self.thread_pool = QThreadPool.globalInstance()
 
         # 1. Menú radial flotante
-        self.radial_menu = RadialMenu(size=360)
+        self.radial_menu = RadialMenu(size=380)
         self.radial_menu.file_dropped.connect(self._on_files_dropped)
+        self.radial_menu.tool_triggered.connect(self._on_tool_triggered)
 
         # 2. Detector de Shift + Drag
         self.watcher = DragShiftWatcher(
@@ -77,12 +84,39 @@ class TangerineApp(QObject):
         self.watcher.enabled = enabled
 
     def _on_files_dropped(self, paths: List[str], target_format: str):
-        """
-        Procesa y convierte los archivos soltados en un hilo de fondo.
-        Completamente silencioso: no emite notificaciones emergentes de Windows.
-        """
-        task = ConversionTask(paths, target_format)
+        """Conversión de formatos completamente silenciosa."""
+        task = ActionTask(convert_files, paths, target_format)
         self.thread_pool.start(task)
+
+    def _on_tool_triggered(self, tool_name: str, paths: List[str]):
+        """Manejo de herramientas avanzadas (Crop, Compress, Collage, Create PDF, Metadata)."""
+        name = tool_name.upper().strip()
+        
+        if name == "CROP" and paths:
+            # Abrir ventana de recorte interactiva Crop Image
+            dialog = CropImageDialog(paths[0])
+            dialog.exec()
+            
+        elif name == "COMPRESS":
+            task = ActionTask(execute_compress, paths)
+            self.thread_pool.start(task)
+            
+        elif name == "CREATE PDF":
+            task = ActionTask(execute_create_pdf, paths)
+            self.thread_pool.start(task)
+            
+        elif name == "COLLAGE":
+            task = ActionTask(execute_collage, paths)
+            self.thread_pool.start(task)
+            
+        elif name == "METADATA":
+            task = ActionTask(execute_metadata_strip, paths)
+            self.thread_pool.start(task)
+            
+        else:
+            # Fallback a conversión estándar
+            task = ActionTask(convert_files, paths, tool_name)
+            self.thread_pool.start(task)
 
     def _on_quit(self):
         self.watcher.stop()
