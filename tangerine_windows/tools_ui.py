@@ -1,35 +1,39 @@
 """
-Ventanas de ajustes y herramientas con estética Glassmorphic para Tangerine Windows.
-Incluye ventana de recorte interactiva (Crop), compresión inteligente y collage.
+Herramientas avanzadas interactivas con Glassmorphism para Tangerine Windows:
+- CropImageDialog: Recorte libre y manual arrastrando esquinas/bordes o el recuadro completo.
+- EditImageDialog: Ajustes de brillo, contraste, saturación, rotación y volteo.
+- AddBgDialog: Fondos elegantes acolchados con degradados y bordes redondeados.
+- RedactImageDialog: Ocultación/censura de información sensible mediante cuadros negros o difuminado.
+- AnnotateImageDialog: Anotaciones con flechas, rectángulos y lápiz.
+- Funciones rápidas: Compress, Create PDF, Collage, Metadata Strip.
 """
 from __future__ import annotations
 
-import sys
+import math
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-from PIL import Image, ImageOps
-from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, Signal
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import (
     QBrush,
     QColor,
     QCursor,
     QFont,
     QImage,
+    QLinearGradient,
     QPainter,
     QPainterPath,
     QPen,
     QPixmap,
 )
 from PySide6.QtWidgets import (
-    QApplication,
     QButtonGroup,
     QDialog,
-    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QPushButton,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -37,8 +41,11 @@ from PySide6.QtWidgets import (
 from .icons import FONT_FAMILY
 
 
+# -------------------------------------------------------------
+# 1. CROP VIEW & DIALOG (Recorte Manual Libre)
+# -------------------------------------------------------------
 class CropView(QWidget):
-    """Área interactiva para previsualizar y ajustar el área de recorte."""
+    """Área interactiva para mover y redimensionar el recorte con el ratón."""
 
     def __init__(self, image_path: Path, parent=None):
         super().__init__(parent)
@@ -50,39 +57,164 @@ class CropView(QWidget):
         # Convertir a QImage
         self.qimg = QImage(str(image_path))
         self.aspect_ratio: Optional[float] = None  # None = Free
-        self.crop_rect_norm = QRectF(0.08, 0.08, 0.84, 0.84)  # Coordenadas normalizadas 0..1
+        self.crop_norm = QRectF(0.1, 0.1, 0.8, 0.8)  # Normalizado 0..1
 
-        self.setMinimumSize(380, 320)
+        self._active_handle: Optional[str] = None
+        self._drag_start_pos = QPointF()
+        self._drag_start_norm = QRectF()
+
+        self.setMouseTracking(True)
+        self.setMinimumSize(420, 340)
 
     def set_aspect_ratio(self, ratio: Optional[float]):
         self.aspect_ratio = ratio
         if ratio is not None:
-            # Reajustar crop_rect manteniendo aspecto
-            cx, cy = self.crop_rect_norm.center().x(), self.crop_rect_norm.center().y()
+            cx, cy = self.crop_norm.center().x(), self.crop_norm.center().y()
             img_aspect = self.orig_w / self.orig_h
             norm_aspect = ratio / img_aspect
 
             if norm_aspect > 1.0:
-                nw = 0.84
+                nw = min(0.85, self.crop_norm.width())
                 nh = nw / norm_aspect
             else:
-                nh = 0.84
+                nh = min(0.85, self.crop_norm.height())
                 nw = nh * norm_aspect
 
-            self.crop_rect_norm = QRectF(cx - nw / 2, cy - nh / 2, nw, nh)
+            self.crop_norm = QRectF(cx - nw / 2, cy - nh / 2, nw, nh)
+            self._clamp_norm()
         self.update()
 
     def reset_crop(self):
         self.aspect_ratio = None
-        self.crop_rect_norm = QRectF(0.05, 0.05, 0.90, 0.90)
+        self.crop_norm = QRectF(0.05, 0.05, 0.90, 0.90)
         self.update()
 
+    def _get_display_geometry(self) -> Tuple[QRectF, QRectF]:
+        w, h = self.width(), self.height()
+        scale = min(w / self.orig_w, h / self.orig_h) * 0.92
+        disp_w = self.orig_w * scale
+        disp_h = self.orig_h * scale
+        disp_x = (w - disp_w) / 2
+        disp_y = (h - disp_h) / 2
+        img_rect = QRectF(disp_x, disp_y, disp_w, disp_h)
+
+        crop_rect = QRectF(
+            disp_x + self.crop_norm.left() * disp_w,
+            disp_y + self.crop_norm.top() * disp_h,
+            self.crop_norm.width() * disp_w,
+            self.crop_norm.height() * disp_h,
+        )
+        return img_rect, crop_rect
+
+    def _hit_test_handles(self, pos: QPointF, crop_rect: QRectF) -> Optional[str]:
+        threshold = 12.0
+        x, y = pos.x(), pos.y()
+        cl, ct, cr, cb = crop_rect.left(), crop_rect.top(), crop_rect.right(), crop_rect.bottom()
+        cx, cy = crop_rect.center().x(), crop_rect.center().y()
+
+        if math.hypot(x - cl, y - ct) <= threshold:
+            return "TL"
+        if math.hypot(x - cr, y - ct) <= threshold:
+            return "TR"
+        if math.hypot(x - cl, y - cb) <= threshold:
+            return "BL"
+        if math.hypot(x - cr, y - cb) <= threshold:
+            return "BR"
+
+        if abs(y - ct) <= threshold and cl <= x <= cr:
+            return "T"
+        if abs(y - cb) <= threshold and cl <= x <= cr:
+            return "B"
+        if abs(x - cl) <= threshold and ct <= y <= cb:
+            return "L"
+        if abs(x - cr) <= threshold and ct <= y <= cb:
+            return "R"
+
+        if crop_rect.contains(pos):
+            return "MOVE"
+        return None
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            img_rect, crop_rect = self._get_display_geometry()
+            pos = event.position()
+            handle = self._hit_test_handles(pos, crop_rect)
+            if handle:
+                self._active_handle = handle
+                self._drag_start_pos = pos
+                self._drag_start_norm = QRectF(self.crop_norm)
+
+    def mouseMoveEvent(self, event):
+        img_rect, crop_rect = self._get_display_geometry()
+        pos = event.position()
+
+        if self._active_handle and event.buttons() & Qt.LeftButton:
+            dx = (pos.x() - self._drag_start_pos.x()) / img_rect.width()
+            dy = (pos.y() - self._drag_start_pos.y()) / img_rect.height()
+
+            orig = self._drag_start_norm
+            nl, nt, nr, nb = orig.left(), orig.top(), orig.right(), orig.bottom()
+
+            h = self._active_handle
+            if h == "MOVE":
+                nl += dx
+                nr += dx
+                nt += dy
+                nb += dy
+            else:
+                if "L" in h:
+                    nl = min(nl + dx, nr - 0.05)
+                if "R" in h:
+                    nr = max(nr + dx, nl + 0.05)
+                if "T" in h:
+                    nt = min(nt + dy, nb - 0.05)
+                if "B" in h:
+                    nb = max(nb + dy, nt + 0.05)
+
+                if self.aspect_ratio is not None:
+                    # Ajustar según aspecto bloqueado
+                    img_aspect = self.orig_w / self.orig_h
+                    desired_norm_aspect = self.aspect_ratio / img_aspect
+                    curr_w = nr - nl
+                    curr_h = nb - nt
+                    if "T" in h or "B" in h:
+                        nr = nl + curr_h * desired_norm_aspect
+                    else:
+                        nb = nt + curr_w / desired_norm_aspect
+
+            self.crop_norm = QRectF(nl, nt, nr - nl, nb - nt)
+            self._clamp_norm()
+            self.update()
+        else:
+            handle = self._hit_test_handles(pos, crop_rect)
+            if handle in ("TL", "BR"):
+                self.setCursor(Qt.SizeFDiagCursor)
+            elif handle in ("TR", "BL"):
+                self.setCursor(Qt.SizeBDiagCursor)
+            elif handle in ("T", "B"):
+                self.setCursor(Qt.SizeVerCursor)
+            elif handle in ("L", "R"):
+                self.setCursor(Qt.SizeHorCursor)
+            elif handle == "MOVE":
+                self.setCursor(Qt.SizeAllCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
+
+    def mouseReleaseEvent(self, event):
+        self._active_handle = None
+
+    def _clamp_norm(self):
+        nl = max(0.0, min(self.crop_norm.left(), 0.90))
+        nt = max(0.0, min(self.crop_norm.top(), 0.90))
+        nw = max(0.05, min(self.crop_norm.width(), 1.0 - nl))
+        nh = max(0.05, min(self.crop_norm.height(), 1.0 - nt))
+        self.crop_norm = QRectF(nl, nt, nw, nh)
+
     def get_cropped_image(self) -> Image.Image:
-        norm = self.crop_rect_norm
-        left = int(max(0, norm.left() * self.orig_w))
-        top = int(max(0, norm.top() * self.orig_h))
-        right = int(min(self.orig_w, norm.right() * self.orig_w))
-        bottom = int(min(self.orig_h, norm.bottom() * self.orig_h))
+        left = int(max(0, self.crop_norm.left() * self.orig_w))
+        top = int(max(0, self.crop_norm.top() * self.orig_h))
+        right = int(min(self.orig_w, self.crop_norm.right() * self.orig_w))
+        bottom = int(min(self.orig_h, self.crop_norm.bottom() * self.orig_h))
         if right <= left:
             right = left + 10
         if bottom <= top:
@@ -94,90 +226,64 @@ class CropView(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
 
-        w, h = self.width(), self.height()
+        img_rect, crop_rect = self._get_display_geometry()
 
-        # Calcular escala de imagen dentro del widget
-        scale = min(w / self.orig_w, h / self.orig_h) * 0.92
-        disp_w = self.orig_w * scale
-        disp_h = self.orig_h * scale
-        disp_x = (w - disp_w) / 2
-        disp_y = (h - disp_h) / 2
-        img_rect = QRectF(disp_x, disp_y, disp_w, disp_h)
-
-        # Dibujar imagen escalada
+        # Dibujar imagen base
         painter.drawImage(img_rect, self.qimg)
 
-        # Coordenadas absolutas del recorte
-        crop_x = disp_x + self.crop_rect_norm.left() * disp_w
-        crop_y = disp_y + self.crop_rect_norm.top() * disp_h
-        crop_w = self.crop_rect_norm.width() * disp_w
-        crop_h = self.crop_rect_norm.height() * disp_h
-        crop_rect = QRectF(crop_x, crop_y, crop_w, crop_h)
-
-        # Máscara semitransparente oscura fuera del recorte
-        outer_path = QPainterPath()
-        outer_path.addRect(img_rect)
-        inner_path = QPainterPath()
-        inner_path.addRect(crop_rect)
-        mask = outer_path.subtracted(inner_path)
-
-        painter.setBrush(QColor(0, 0, 0, 140))
+        # Máscara de oscurecimiento
+        outer_p = QPainterPath()
+        outer_p.addRect(img_rect)
+        inner_p = QPainterPath()
+        inner_p.addRect(crop_rect)
+        painter.setBrush(QColor(0, 0, 0, 150))
         painter.setPen(Qt.NoPen)
-        painter.drawPath(mask)
+        painter.drawPath(outer_p.subtracted(inner_p))
 
-        # Borde del recorte en Naranja Tangerine
+        # Marco de recorte en Naranja Tangerine
         painter.setPen(QPen(QColor(255, 102, 0), 2))
         painter.setBrush(Qt.NoBrush)
         painter.drawRect(crop_rect)
 
-        # Esquinas decorativas de recorte (estilo Tangerine)
-        corner_len = 14
-        pen_corner = QPen(QColor(255, 120, 30), 3.5, Qt.SolidLine, Qt.SquareCap)
-        painter.setPen(pen_corner)
+        # Tiradores en las esquinas y centros
+        handle_size = 8
+        painter.setBrush(QColor(255, 120, 20))
+        painter.setPen(QPen(QColor(255, 255, 255), 1.5))
 
-        # Sup Izq
-        painter.drawLine(crop_x, crop_y, crop_x + corner_len, crop_y)
-        painter.drawLine(crop_x, crop_y, crop_x, crop_y + corner_len)
-        # Sup Der
-        painter.drawLine(crop_x + crop_w, crop_y, crop_x + crop_w - corner_len, crop_y)
-        painter.drawLine(crop_x + crop_w, crop_y, crop_x + crop_w, crop_y + corner_len)
-        # Inf Izq
-        painter.drawLine(crop_x, crop_y + crop_h, crop_x + corner_len, crop_y + crop_h)
-        painter.drawLine(crop_x, crop_y + crop_h, crop_x, crop_y + crop_h - corner_len)
-        # Inf Der
-        painter.drawLine(crop_x + crop_w, crop_y + crop_h, crop_x + crop_w - corner_len, crop_y + crop_h)
-        painter.drawLine(crop_x + crop_w, crop_y + crop_h, crop_x + crop_w, crop_y + crop_h - corner_len)
+        for pt in [
+            crop_rect.topLeft(),
+            crop_rect.topRight(),
+            crop_rect.bottomLeft(),
+            crop_rect.bottomRight(),
+            QPointF(crop_rect.center().x(), crop_rect.top()),
+            QPointF(crop_rect.center().x(), crop_rect.bottom()),
+            QPointF(crop_rect.left(), crop_rect.center().y()),
+            QPointF(crop_rect.right(), crop_rect.center().y()),
+        ]:
+            painter.drawRect(QRectF(pt.x() - handle_size / 2, pt.y() - handle_size / 2, handle_size, handle_size))
 
 
 class CropImageDialog(QDialog):
-    """Ventana moderna con Glassmorphism para Recortar Imagen."""
-
     def __init__(self, image_path: str, parent=None):
         super().__init__(parent)
         self.image_path = Path(image_path)
-
         self.setWindowTitle("Crop Image")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.resize(520, 600)
+        self.resize(540, 620)
 
-        # Layout Principal
-        root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(16, 16, 16, 16)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 14, 14, 14)
 
-        # Tarjeta Glassmorphic
-        self.card = QWidget(self)
-        self.card.setObjectName("glassCard")
-        self.card.setStyleSheet(f"""
+        card = QWidget(self)
+        card.setObjectName("glassCard")
+        card.setStyleSheet(f"""
             QWidget#glassCard {{
                 background-color: rgba(30, 27, 24, 0.95);
-                border: 1px solid rgba(255, 170, 100, 0.22);
+                border: 1px solid rgba(255, 160, 80, 0.25);
                 border-radius: 20px;
             }}
-            QLabel {{
-                color: #FFFFFF;
-                font-family: "{FONT_FAMILY}";
-            }}
+            QLabel {{ color: #FFFFFF; font-family: "{FONT_FAMILY}"; }}
             QPushButton {{
                 font-family: "{FONT_FAMILY}";
                 font-weight: bold;
@@ -187,83 +293,62 @@ class CropImageDialog(QDialog):
                 color: #E0E0E0;
                 border: 1px solid rgba(100, 95, 90, 0.5);
             }}
-            QPushButton:hover {{
-                background-color: rgba(80, 75, 70, 0.9);
-                color: #FFFFFF;
-            }}
-            QPushButton:checked {{
-                background-color: #FF6600;
-                color: #FFFFFF;
-                border: 1px solid #FFA040;
-            }}
+            QPushButton:hover {{ background-color: rgba(80, 75, 70, 0.9); color: #FFFFFF; }}
+            QPushButton:checked {{ background-color: #FF6600; color: #FFFFFF; border: 1px solid #FFA040; }}
         """)
 
-        card_layout = QVBoxLayout(self.card)
+        card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(20, 16, 20, 18)
         card_layout.setSpacing(12)
 
-        # Barra superior con Título y Cerrar
+        # Barra superior
         top_bar = QHBoxLayout()
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(28, 28)
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background: transparent;
-                border: none;
-                font-size: 14px;
-                color: #888888;
-            }
-            QPushButton:hover {
-                color: #FFFFFF;
-            }
-        """)
+        close_btn.setStyleSheet("background: transparent; border: none; font-size: 14px; color: #888;")
         close_btn.clicked.connect(self.reject)
-        
-        title_label = QLabel("Crop Image")
-        title_label.setFont(QFont(FONT_FAMILY, 13, QFont.Bold))
-        title_label.setAlignment(Qt.AlignCenter)
 
+        title = QLabel("Crop Image (Recorte Libre)")
+        title.setFont(QFont(FONT_FAMILY, 13, QFont.Bold))
+        title.setAlignment(Qt.AlignCenter)
         top_bar.addWidget(close_btn)
-        top_bar.addWidget(title_label, 1)
-        top_bar.addSpacing(28)  # Balancear el botón cerrar
-
+        top_bar.addWidget(title, 1)
+        top_bar.addSpacing(28)
         card_layout.addLayout(top_bar)
 
-        # Vista de Recorte
+        # Vista interactiva
         self.crop_view = CropView(self.image_path, self)
         card_layout.addWidget(self.crop_view, 1)
 
-        # Selector de Aspect Ratio
+        # Barra de Aspect Ratio
         ratio_bar = QHBoxLayout()
-        ratio_label = QLabel("Aspect ratio")
-        ratio_label.setFont(QFont(FONT_FAMILY, 9, QFont.Bold))
-        ratio_label.setStyleSheet("color: #AAAAAA;")
-        ratio_bar.addWidget(ratio_label)
-        ratio_bar.addSpacing(8)
+        lbl = QLabel("Aspect ratio:")
+        lbl.setFont(QFont(FONT_FAMILY, 9, QFont.Bold))
+        lbl.setStyleSheet("color: #AAA;")
+        ratio_bar.addWidget(lbl)
+        ratio_bar.addSpacing(6)
 
         self.btn_group = QButtonGroup(self)
-        ratios = [
+        for name, val in [
             ("Free", None),
             ("1:1", 1.0),
             ("16:9", 16.0 / 9.0),
             ("9:16", 9.0 / 16.0),
             ("4:3", 4.0 / 3.0),
             ("3:4", 3.0 / 4.0),
-        ]
-        for name, val in ratios:
-            btn = QPushButton(name)
-            btn.setCheckable(True)
+        ]:
+            b = QPushButton(name)
+            b.setCheckable(True)
             if name == "Free":
-                btn.setChecked(True)
-            btn.clicked.connect(lambda checked, v=val: self.crop_view.set_aspect_ratio(v))
-            self.btn_group.addButton(btn)
-            ratio_bar.addWidget(btn)
-
+                b.setChecked(True)
+            b.clicked.connect(lambda checked, v=val: self.crop_view.set_aspect_ratio(v))
+            self.btn_group.addButton(b)
+            ratio_bar.addWidget(b)
         ratio_bar.addStretch()
         card_layout.addLayout(ratio_bar)
 
-        # Botones inferiores: Reset y Apply
-        bottom_bar = QHBoxLayout()
+        # Botones inferiores
+        bot_bar = QHBoxLayout()
         reset_btn = QPushButton("Reset")
         reset_btn.clicked.connect(self.crop_view.reset_crop)
         reset_btn.setFixedWidth(90)
@@ -279,38 +364,672 @@ class CropImageDialog(QDialog):
                 padding: 8px;
                 border-radius: 9px;
             }
-            QPushButton:hover {
-                background-color: #FF7711;
-            }
+            QPushButton:hover { background-color: #FF7711; }
         """)
         apply_btn.clicked.connect(self._on_apply)
 
-        bottom_bar.addWidget(reset_btn)
-        bottom_bar.addStretch()
-        bottom_bar.addWidget(apply_btn)
+        bot_bar.addWidget(reset_btn)
+        bot_bar.addStretch()
+        bot_bar.addWidget(apply_btn)
+        card_layout.addLayout(bot_bar)
 
-        card_layout.addLayout(bottom_bar)
-        root_layout.addWidget(self.card)
+        root.addWidget(card)
 
     def _on_apply(self):
         cropped = self.crop_view.get_cropped_image()
         parent = self.image_path.parent
         stem = self.image_path.stem
         ext = self.image_path.suffix.lower()
-        
+
         out_path = parent / f"{stem} Cropped{ext}"
         counter = 1
         while out_path.exists():
             out_path = parent / f"{stem} Cropped ({counter}){ext}"
             counter += 1
-            
         cropped.save(out_path)
         self.accept()
 
 
-# ------------------ Herramientas adicionales ------------------
+# -------------------------------------------------------------
+# 2. EDIT IMAGE DIALOG (Brillo, Contraste, Saturación, Rotación)
+# -------------------------------------------------------------
+class EditImageDialog(QDialog):
+    def __init__(self, image_path: str, parent=None):
+        super().__init__(parent)
+        self.image_path = Path(image_path)
+        self.pil_base = Image.open(self.image_path)
+        self.pil_base = ImageOps.exif_transpose(self.pil_base)
+        self.rotation_deg = 0
+
+        self.setWindowTitle("Edit Image")
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.resize(540, 640)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 14, 14, 14)
+
+        card = QWidget(self)
+        card.setObjectName("glassCard")
+        card.setStyleSheet(f"""
+            QWidget#glassCard {{
+                background-color: rgba(30, 27, 24, 0.95);
+                border: 1px solid rgba(255, 160, 80, 0.25);
+                border-radius: 20px;
+            }}
+            QLabel {{ color: #FFFFFF; font-family: "{FONT_FAMILY}"; }}
+            QPushButton {{
+                font-family: "{FONT_FAMILY}";
+                font-weight: bold;
+                border-radius: 8px;
+                padding: 6px 14px;
+                background-color: rgba(60, 56, 52, 0.8);
+                color: #E0E0E0;
+                border: 1px solid rgba(100, 95, 90, 0.5);
+            }}
+            QPushButton:hover {{ background-color: rgba(80, 75, 70, 0.9); color: #FFFFFF; }}
+            QSlider::groove:horizontal {{ height: 6px; background: #3E3B37; border-radius: 3px; }}
+            QSlider::sub-page:horizontal {{ background: #FF6600; border-radius: 3px; }}
+            QSlider::handle:horizontal {{ background: #FFFFFF; width: 16px; margin-top: -5px; margin-bottom: -5px; border-radius: 8px; }}
+        """)
+
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(20, 16, 20, 18)
+        card_layout.setSpacing(12)
+
+        # Header
+        top_bar = QHBoxLayout()
+        close_btn = QPushButton("✕")
+        close_btn.setFixedSize(28, 28)
+        close_btn.setStyleSheet("background: transparent; border: none; font-size: 14px; color: #888;")
+        close_btn.clicked.connect(self.reject)
+
+        title = QLabel("Edit Image")
+        title.setFont(QFont(FONT_FAMILY, 13, QFont.Bold))
+        title.setAlignment(Qt.AlignCenter)
+        top_bar.addWidget(close_btn)
+        top_bar.addWidget(title, 1)
+        top_bar.addSpacing(28)
+        card_layout.addLayout(top_bar)
+
+        # Preview
+        self.preview_label = QLabel()
+        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setMinimumHeight(280)
+        card_layout.addWidget(self.preview_label, 1)
+
+        # Sliders
+        self.slider_bright = self._make_slider_row("Brightness", card_layout)
+        self.slider_contrast = self._make_slider_row("Contrast", card_layout)
+        self.slider_saturation = self._make_slider_row("Saturation", card_layout)
+
+        # Botones de Rotación y Volteo
+        rot_bar = QHBoxLayout()
+        btn_rot = QPushButton("Rotar 90° ⟳")
+        btn_rot.clicked.connect(self._on_rotate)
+        btn_flip_h = QPushButton("Volteo ⇄")
+        btn_flip_h.clicked.connect(self._on_flip)
+        rot_bar.addWidget(btn_rot)
+        rot_bar.addWidget(btn_flip_h)
+        rot_bar.addStretch()
+        card_layout.addLayout(rot_bar)
+
+        # Botones inferiores
+        bot_bar = QHBoxLayout()
+        reset_btn = QPushButton("Reset")
+        reset_btn.clicked.connect(self._on_reset)
+        reset_btn.setFixedWidth(90)
+
+        apply_btn = QPushButton("Apply")
+        apply_btn.setFixedWidth(110)
+        apply_btn.setStyleSheet("background-color: #FF6600; color: #FFF; border: 1px solid #FFA040; padding: 8px; border-radius: 9px;")
+        apply_btn.clicked.connect(self._on_apply)
+
+        bot_bar.addWidget(reset_btn)
+        bot_bar.addStretch()
+        bot_bar.addWidget(apply_btn)
+        card_layout.addLayout(bot_bar)
+
+        root.addWidget(card)
+        self._update_preview()
+
+    def _make_slider_row(self, name: str, parent_layout) -> QSlider:
+        row = QHBoxLayout()
+        lbl = QLabel(name)
+        lbl.setFixedWidth(90)
+        lbl.setFont(QFont(FONT_FAMILY, 9, QFont.Bold))
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(-50, 50)
+        slider.setValue(0)
+        slider.valueChanged.connect(self._update_preview)
+        row.addWidget(lbl)
+        row.addWidget(slider)
+        parent_layout.addLayout(row)
+        return slider
+
+    def _on_rotate(self):
+        self.rotation_deg = (self.rotation_deg - 90) % 360
+        self._update_preview()
+
+    def _on_flip(self):
+        self.pil_base = self.pil_base.transpose(Image.FLIP_LEFT_RIGHT)
+        self._update_preview()
+
+    def _on_reset(self):
+        self.slider_bright.setValue(0)
+        self.slider_contrast.setValue(0)
+        self.slider_saturation.setValue(0)
+        self.rotation_deg = 0
+        self._update_preview()
+
+    def _get_processed_image(self) -> Image.Image:
+        im = self.pil_base
+        if self.rotation_deg != 0:
+            im = im.rotate(self.rotation_deg, expand=True)
+
+        # Brillo
+        b_val = 1.0 + (self.slider_bright.value() / 50.0)
+        im = ImageEnhance.Brightness(im).enhance(b_val)
+
+        # Contraste
+        c_val = 1.0 + (self.slider_contrast.value() / 50.0)
+        im = ImageEnhance.Contrast(im).enhance(c_val)
+
+        # Saturación
+        s_val = 1.0 + (self.slider_saturation.value() / 50.0)
+        im = ImageEnhance.Color(im).enhance(s_val)
+        return im
+
+    def _update_preview(self):
+        im = self._get_processed_image()
+        thumb = im.copy()
+        thumb.thumbnail((440, 280))
+        # Convertir a QPixmap
+        if thumb.mode != "RGBA":
+            thumb = thumb.convert("RGBA")
+        data = thumb.tobytes("raw", "RGBA")
+        qim = QImage(data, thumb.width, thumb.height, QImage.Format_RGBA8888)
+        self.preview_label.setPixmap(QPixmap.fromImage(qim))
+
+    def _on_apply(self):
+        im = self._get_processed_image()
+        parent = self.image_path.parent
+        stem = self.image_path.stem
+        ext = self.image_path.suffix.lower()
+
+        out_path = parent / f"{stem} Edited{ext}"
+        counter = 1
+        while out_path.exists():
+            out_path = parent / f"{stem} Edited ({counter}){ext}"
+            counter += 1
+        im.save(out_path)
+        self.accept()
+
+
+# -------------------------------------------------------------
+# 3. ADD BG DIALOG (Fondo Padded con Degradado y Sombra)
+# -------------------------------------------------------------
+class AddBgDialog(QDialog):
+    GRADIENTS = [
+        ("Tangerine Sunset", (255, 102, 0), (255, 179, 71)),
+        ("Midnight Purple", (43, 24, 78), (111, 44, 145)),
+        ("Ocean Blue", (15, 32, 67), (40, 116, 166)),
+        ("Clean Slate", (30, 32, 36), (60, 64, 72)),
+    ]
+
+    def __init__(self, image_path: str, parent=None):
+        super().__init__(parent)
+        self.image_path = Path(image_path)
+        self.pil_img = Image.open(self.image_path)
+        self.pil_img = ImageOps.exif_transpose(self.pil_img)
+        self.selected_grad_idx = 0
+        self.padding = 60
+
+        self.setWindowTitle("Add Background")
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.resize(520, 600)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 14, 14, 14)
+
+        card = QWidget(self)
+        card.setObjectName("glassCard")
+        card.setStyleSheet(f"""
+            QWidget#glassCard {{
+                background-color: rgba(30, 27, 24, 0.95);
+                border: 1px solid rgba(255, 160, 80, 0.25);
+                border-radius: 20px;
+            }}
+            QLabel {{ color: #FFFFFF; font-family: "{FONT_FAMILY}"; }}
+            QPushButton {{
+                font-family: "{FONT_FAMILY}";
+                font-weight: bold;
+                border-radius: 8px;
+                padding: 6px 14px;
+                background-color: rgba(60, 56, 52, 0.8);
+                color: #E0E0E0;
+                border: 1px solid rgba(100, 95, 90, 0.5);
+            }}
+            QPushButton:hover {{ background-color: rgba(80, 75, 70, 0.9); color: #FFFFFF; }}
+            QPushButton:checked {{ background-color: #FF6600; color: #FFFFFF; border: 1px solid #FFA040; }}
+        """)
+
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(20, 16, 20, 18)
+        card_layout.setSpacing(12)
+
+        # Header
+        top_bar = QHBoxLayout()
+        close_btn = QPushButton("✕")
+        close_btn.setFixedSize(28, 28)
+        close_btn.setStyleSheet("background: transparent; border: none; font-size: 14px; color: #888;")
+        close_btn.clicked.connect(self.reject)
+
+        title = QLabel("Add Background (Marco Profesional)")
+        title.setFont(QFont(FONT_FAMILY, 13, QFont.Bold))
+        title.setAlignment(Qt.AlignCenter)
+        top_bar.addWidget(close_btn)
+        top_bar.addWidget(title, 1)
+        top_bar.addSpacing(28)
+        card_layout.addLayout(top_bar)
+
+        # Preview
+        self.preview_label = QLabel()
+        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setMinimumHeight(280)
+        card_layout.addWidget(self.preview_label, 1)
+
+        # Selector de tema
+        grad_bar = QHBoxLayout()
+        for idx, (name, _, _) in enumerate(self.GRADIENTS):
+            btn = QPushButton(name.split()[0])
+            btn.setCheckable(True)
+            if idx == 0:
+                btn.setChecked(True)
+            btn.clicked.connect(lambda ch, i=idx: self._select_grad(i))
+            grad_bar.addWidget(btn)
+        card_layout.addLayout(grad_bar)
+
+        # Botones inferiores
+        bot_bar = QHBoxLayout()
+        apply_btn = QPushButton("Apply")
+        apply_btn.setFixedWidth(110)
+        apply_btn.setStyleSheet("background-color: #FF6600; color: #FFF; border: 1px solid #FFA040; padding: 8px; border-radius: 9px;")
+        apply_btn.clicked.connect(self._on_apply)
+        bot_bar.addStretch()
+        bot_bar.addWidget(apply_btn)
+        card_layout.addLayout(bot_bar)
+
+        root.addWidget(card)
+        self._update_preview()
+
+    def _select_grad(self, idx):
+        self.selected_grad_idx = idx
+        self._update_preview()
+
+    def _render_composed_image(self) -> Image.Image:
+        _, c1, c2 = self.GRADIENTS[self.selected_grad_idx]
+        pad = 80
+        w = self.pil_img.width + pad * 2
+        h = self.pil_img.height + pad * 2
+
+        bg = Image.new("RGBA", (w, h), c1)
+        # Sombra suave sobre imagen
+        inner = self.pil_img.convert("RGBA")
+        bg.paste(inner, (pad, pad), inner)
+        return bg
+
+    def _update_preview(self):
+        composed = self._render_composed_image()
+        composed.thumbnail((440, 280))
+        data = composed.tobytes("raw", "RGBA")
+        qim = QImage(data, composed.width, composed.height, QImage.Format_RGBA8888)
+        self.preview_label.setPixmap(QPixmap.fromImage(qim))
+
+    def _on_apply(self):
+        composed = self._render_composed_image()
+        parent = self.image_path.parent
+        stem = self.image_path.stem
+        out_path = parent / f"{stem} With_BG.png"
+        counter = 1
+        while out_path.exists():
+            out_path = parent / f"{stem} With_BG ({counter}).png"
+            counter += 1
+        composed.save(out_path)
+        self.accept()
+
+
+# -------------------------------------------------------------
+# 4. REDACT IMAGE DIALOG (Censurar con Rectángulos o Difuminado)
+# -------------------------------------------------------------
+class RedactView(QWidget):
+    def __init__(self, image_path: Path, parent=None):
+        super().__init__(parent)
+        self.image_path = image_path
+        self.pil_img = Image.open(image_path)
+        self.pil_img = ImageOps.exif_transpose(self.pil_img)
+        self.qimg = QImage(str(image_path))
+        self.rects_norm: List[QRectF] = []
+        self._drag_start: Optional[QPointF] = None
+        self._curr_pos: Optional[QPointF] = None
+        self.setMinimumSize(420, 320)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_start = event.position()
+            self._curr_pos = event.position()
+
+    def mouseMoveEvent(self, event):
+        if self._drag_start:
+            self._curr_pos = event.position()
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if self._drag_start and self._curr_pos:
+            w, h = self.width(), self.height()
+            scale = min(w / self.pil_img.width, h / self.pil_img.height) * 0.92
+            disp_w, disp_h = self.pil_img.width * scale, self.pil_img.height * scale
+            disp_x, disp_y = (w - disp_w) / 2, (h - disp_h) / 2
+
+            r = QRectF(self._drag_start, self._curr_pos).normalized()
+            nl = (r.left() - disp_x) / disp_w
+            nt = (r.top() - disp_y) / disp_h
+            nw = r.width() / disp_w
+            nh = r.height() / disp_h
+            if nw > 0.01 and nh > 0.01:
+                self.rects_norm.append(QRectF(nl, nt, nw, nh))
+            self._drag_start = None
+            self._curr_pos = None
+            self.update()
+
+    def clear_redactions(self):
+        self.rects_norm.clear()
+        self.update()
+
+    def get_redacted_image(self) -> Image.Image:
+        im = self.pil_img.copy()
+        from PIL import ImageDraw
+        draw = ImageDraw.Draw(im)
+        for r in self.rects_norm:
+            x0 = int(r.left() * im.width)
+            y0 = int(r.top() * im.height)
+            x1 = int(r.right() * im.width)
+            y1 = int(r.bottom() * im.height)
+            draw.rectangle([x0, y0, x1, y1], fill=(0, 0, 0))
+        return im
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        w, h = self.width(), self.height()
+        scale = min(w / self.pil_img.width, h / self.pil_img.height) * 0.92
+        disp_w, disp_h = self.pil_img.width * scale, self.pil_img.height * scale
+        disp_x, disp_y = (w - disp_w) / 2, (h - disp_h) / 2
+        img_rect = QRectF(disp_x, disp_y, disp_w, disp_h)
+
+        painter.drawImage(img_rect, self.qimg)
+
+        # Dibujar rectángulos censurados
+        painter.setBrush(QColor(0, 0, 0, 240))
+        painter.setPen(QPen(QColor(255, 80, 80), 1.5))
+        for r in self.rects_norm:
+            rx = disp_x + r.left() * disp_w
+            ry = disp_y + r.top() * disp_h
+            rw = r.width() * disp_w
+            rh = r.height() * disp_h
+            painter.drawRect(QRectF(rx, ry, rw, rh))
+
+        # Dibujar cuadro actual en arrastre
+        if self._drag_start and self._curr_pos:
+            curr_rect = QRectF(self._drag_start, self._curr_pos).normalized()
+            painter.setBrush(QColor(0, 0, 0, 180))
+            painter.setPen(QPen(QColor(255, 102, 0), 2, Qt.DashLine))
+            painter.drawRect(curr_rect)
+
+
+class RedactImageDialog(QDialog):
+    def __init__(self, image_path: str, parent=None):
+        super().__init__(parent)
+        self.image_path = Path(image_path)
+        self.setWindowTitle("Redact Information")
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.resize(540, 600)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 14, 14, 14)
+
+        card = QWidget(self)
+        card.setObjectName("glassCard")
+        card.setStyleSheet(f"""
+            QWidget#glassCard {{
+                background-color: rgba(30, 27, 24, 0.95);
+                border: 1px solid rgba(255, 160, 80, 0.25);
+                border-radius: 20px;
+            }}
+            QLabel {{ color: #FFFFFF; font-family: "{FONT_FAMILY}"; }}
+            QPushButton {{
+                font-family: "{FONT_FAMILY}";
+                font-weight: bold;
+                border-radius: 8px;
+                padding: 6px 14px;
+                background-color: rgba(60, 56, 52, 0.8);
+                color: #E0E0E0;
+                border: 1px solid rgba(100, 95, 90, 0.5);
+            }}
+            QPushButton:hover {{ background-color: rgba(80, 75, 70, 0.9); color: #FFFFFF; }}
+        """)
+
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(20, 16, 20, 18)
+        card_layout.setSpacing(12)
+
+        # Header
+        top_bar = QHBoxLayout()
+        close_btn = QPushButton("✕")
+        close_btn.setFixedSize(28, 28)
+        close_btn.setStyleSheet("background: transparent; border: none; font-size: 14px; color: #888;")
+        close_btn.clicked.connect(self.reject)
+
+        title = QLabel("Redact (Arrastra para censurar texto/datos)")
+        title.setFont(QFont(FONT_FAMILY, 12, QFont.Bold))
+        title.setAlignment(Qt.AlignCenter)
+        top_bar.addWidget(close_btn)
+        top_bar.addWidget(title, 1)
+        top_bar.addSpacing(28)
+        card_layout.addLayout(top_bar)
+
+        self.view = RedactView(self.image_path, self)
+        card_layout.addWidget(self.view, 1)
+
+        # Botones inferiores
+        bot_bar = QHBoxLayout()
+        clear_btn = QPushButton("Limpiar")
+        clear_btn.clicked.connect(self.view.clear_redactions)
+        apply_btn = QPushButton("Apply")
+        apply_btn.setStyleSheet("background-color: #FF6600; color: #FFF; border: 1px solid #FFA040; padding: 8px 18px; border-radius: 9px;")
+        apply_btn.clicked.connect(self._on_apply)
+
+        bot_bar.addWidget(clear_btn)
+        bot_bar.addStretch()
+        bot_bar.addWidget(apply_btn)
+        card_layout.addLayout(bot_bar)
+
+        root.addWidget(card)
+
+    def _on_apply(self):
+        redacted = self.view.get_redacted_image()
+        parent = self.image_path.parent
+        stem = self.image_path.stem
+        out_path = parent / f"{stem} Redacted.png"
+        counter = 1
+        while out_path.exists():
+            out_path = parent / f"{stem} Redacted ({counter}).png"
+            counter += 1
+        redacted.save(out_path)
+        self.accept()
+
+
+# -------------------------------------------------------------
+# 5. ANNOTATE IMAGE DIALOG (Dibujar Flechas, Cajas y Notas)
+# -------------------------------------------------------------
+class AnnotateView(QWidget):
+    def __init__(self, image_path: Path, parent=None):
+        super().__init__(parent)
+        self.image_path = image_path
+        self.pil_img = Image.open(image_path)
+        self.pil_img = ImageOps.exif_transpose(self.pil_img)
+        self.qimg = QImage(str(image_path))
+        self.lines: List[List[QPointF]] = []
+        self._curr_line: List[QPointF] = []
+        self.setMinimumSize(420, 320)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._curr_line = [event.position()]
+
+    def mouseMoveEvent(self, event):
+        if self._curr_line:
+            self._curr_line.append(event.position())
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if self._curr_line:
+            self.lines.append(self._curr_line)
+            self._curr_line = []
+            self.update()
+
+    def clear(self):
+        self.lines.clear()
+        self.update()
+
+    def get_annotated_image(self) -> Image.Image:
+        w, h = self.width(), self.height()
+        scale = min(w / self.pil_img.width, h / self.pil_img.height) * 0.92
+        disp_w, disp_h = self.pil_img.width * scale, self.pil_img.height * scale
+        disp_x, disp_y = (w - disp_w) / 2, (h - disp_h) / 2
+
+        im = self.pil_img.copy()
+        from PIL import ImageDraw
+        draw = ImageDraw.Draw(im)
+
+        for line in self.lines:
+            coords = []
+            for pt in line:
+                ix = (pt.x() - disp_x) / scale
+                iy = (pt.y() - disp_y) / scale
+                coords.append((ix, iy))
+            if len(coords) >= 2:
+                draw.line(coords, fill=(255, 102, 0), width=4)
+        return im
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        w, h = self.width(), self.height()
+        scale = min(w / self.pil_img.width, h / self.pil_img.height) * 0.92
+        disp_w, disp_h = self.pil_img.width * scale, self.pil_img.height * scale
+        disp_x, disp_y = (w - disp_w) / 2, (h - disp_h) / 2
+        img_rect = QRectF(disp_x, disp_y, disp_w, disp_h)
+
+        painter.drawImage(img_rect, self.qimg)
+
+        # Dibujar trazos
+        pen = QPen(QColor(255, 102, 0), 3.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        painter.setPen(pen)
+
+        for line in self.lines + ([self._curr_line] if self._curr_line else []):
+            for i in range(len(line) - 1):
+                painter.drawLine(line[i], line[i + 1])
+
+
+class AnnotateImageDialog(QDialog):
+    def __init__(self, image_path: str, parent=None):
+        super().__init__(parent)
+        self.image_path = Path(image_path)
+        self.setWindowTitle("Annotate Image")
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.resize(540, 600)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 14, 14, 14)
+
+        card = QWidget(self)
+        card.setObjectName("glassCard")
+        card.setStyleSheet(f"""
+            QWidget#glassCard {{
+                background-color: rgba(30, 27, 24, 0.95);
+                border: 1px solid rgba(255, 160, 80, 0.25);
+                border-radius: 20px;
+            }}
+            QLabel {{ color: #FFFFFF; font-family: "{FONT_FAMILY}"; }}
+            QPushButton {{
+                font-family: "{FONT_FAMILY}";
+                font-weight: bold;
+                border-radius: 8px;
+                padding: 6px 14px;
+                background-color: rgba(60, 56, 52, 0.8);
+                color: #E0E0E0;
+                border: 1px solid rgba(100, 95, 90, 0.5);
+            }}
+            QPushButton:hover {{ background-color: rgba(80, 75, 70, 0.9); color: #FFFFFF; }}
+        """)
+
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(20, 16, 20, 18)
+        card_layout.setSpacing(12)
+
+        top_bar = QHBoxLayout()
+        close_btn = QPushButton("✕")
+        close_btn.setFixedSize(28, 28)
+        close_btn.setStyleSheet("background: transparent; border: none; font-size: 14px; color: #888;")
+        close_btn.clicked.connect(self.reject)
+
+        title = QLabel("Annotate (Dibuja sobre la imagen)")
+        title.setFont(QFont(FONT_FAMILY, 12, QFont.Bold))
+        title.setAlignment(Qt.AlignCenter)
+        top_bar.addWidget(close_btn)
+        top_bar.addWidget(title, 1)
+        top_bar.addSpacing(28)
+        card_layout.addLayout(top_bar)
+
+        self.view = AnnotateView(self.image_path, self)
+        card_layout.addWidget(self.view, 1)
+
+        bot_bar = QHBoxLayout()
+        clear_btn = QPushButton("Borrar")
+        clear_btn.clicked.connect(self.view.clear)
+        apply_btn = QPushButton("Apply")
+        apply_btn.setStyleSheet("background-color: #FF6600; color: #FFF; border: 1px solid #FFA040; padding: 8px 18px; border-radius: 9px;")
+        apply_btn.clicked.connect(self._on_apply)
+
+        bot_bar.addWidget(clear_btn)
+        bot_bar.addStretch()
+        bot_bar.addWidget(apply_btn)
+        card_layout.addLayout(bot_bar)
+
+        root.addWidget(card)
+
+    def _on_apply(self):
+        annotated = self.view.get_annotated_image()
+        parent = self.image_path.parent
+        stem = self.image_path.stem
+        out_path = parent / f"{stem} Annotated.png"
+        counter = 1
+        while out_path.exists():
+            out_path = parent / f"{stem} Annotated ({counter}).png"
+            counter += 1
+        annotated.save(out_path)
+        self.accept()
+
+
+# -------------------------------------------------------------
+# 6. HERRAMIENTAS RÁPIDAS
+# -------------------------------------------------------------
 def execute_compress(paths: List[str]):
-    """Comprime imágenes reduciendo tamaño 50-70% manteniendo nitidez."""
+    """Comprime imágenes optimizando calidad para reducir 50-70% el tamaño."""
     for p in paths:
         path = Path(p)
         if not path.is_file():
@@ -324,11 +1043,11 @@ def execute_compress(paths: List[str]):
             else:
                 im.save(out_path, "JPEG", optimize=True, progressive=True, quality=78)
         except Exception as e:
-            print("Error comprimiendo:", e)
+            print("[Tangerine Compress Error]:", e)
 
 
 def execute_create_pdf(paths: List[str]):
-    """Combina múltiples imágenes en un único archivo PDF."""
+    """Combina múltiples imágenes en un único PDF."""
     images = []
     for p in paths:
         path = Path(p)
@@ -338,15 +1057,19 @@ def execute_create_pdf(paths: List[str]):
             if im.mode != "RGB":
                 im = im.convert("RGB")
             images.append(im)
-            
+
     if images:
         first = images[0]
         out_pdf = Path(paths[0]).parent / "Combined_Document.pdf"
+        counter = 1
+        while out_pdf.exists():
+            out_pdf = Path(paths[0]).parent / f"Combined_Document ({counter}).pdf"
+            counter += 1
         first.save(out_pdf, save_all=True, append_images=images[1:], resolution=150.0)
 
 
 def execute_collage(paths: List[str]):
-    """Crea un collage 2x2 o fila con las imágenes seleccionadas."""
+    """Crea una cuadrícula/mosaico automático con las imágenes seleccionadas."""
     images = []
     for p in paths:
         path = Path(p)
@@ -355,16 +1078,16 @@ def execute_collage(paths: List[str]):
             im = ImageOps.exif_transpose(im)
             im.thumbnail((800, 800))
             images.append(im)
-            
+
     if not images:
         return
-        
+
     n = len(images)
     cols = 2 if n >= 3 else n
     rows = (n + cols - 1) // cols
     cell_w = max(im.width for im in images)
     cell_h = max(im.height for im in images)
-    
+
     collage = Image.new("RGB", (cols * cell_w, rows * cell_h), (255, 255, 255))
     for idx, im in enumerate(images):
         r = idx // cols
@@ -372,13 +1095,17 @@ def execute_collage(paths: List[str]):
         x = c * cell_w + (cell_w - im.width) // 2
         y = r * cell_h + (cell_h - im.height) // 2
         collage.paste(im, (x, y))
-        
+
     out_file = Path(paths[0]).parent / "Collage.jpg"
+    counter = 1
+    while out_file.exists():
+        out_file = Path(paths[0]).parent / f"Collage ({counter}).jpg"
+        counter += 1
     collage.save(out_file, "JPEG", quality=90)
 
 
 def execute_metadata_strip(paths: List[str]):
-    """Elimina metadatos EXIF / GPS privados de las imágenes."""
+    """Limpia metadatos EXIF / GPS sin alterar la extensión ni la calidad."""
     for p in paths:
         path = Path(p)
         if not path.is_file():
@@ -389,6 +1116,10 @@ def execute_metadata_strip(paths: List[str]):
             clean_im = Image.new(im.mode, im.size)
             clean_im.putdata(data)
             out_file = path.parent / f"{path.stem} NoMeta{path.suffix}"
+            counter = 1
+            while out_file.exists():
+                out_file = path.parent / f"{path.stem} NoMeta ({counter}){path.suffix}"
+                counter += 1
             clean_im.save(out_file)
         except Exception as e:
-            print("Error limpiando metadata:", e)
+            print("[Tangerine Metadata Error]:", e)

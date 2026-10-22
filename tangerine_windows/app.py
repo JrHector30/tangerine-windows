@@ -1,6 +1,7 @@
 """
 Coordinador principal de la aplicación Tangerine Windows.
-Completamente silencioso y conectado con sub-herramientas (Crop, Compress, Collage, etc.).
+Completamente silencioso y conectado con todas las sub-herramientas:
+Crop, Edit, Add BG, Redact, Annotate, Compress, Create PDF, Collage y Metadata.
 """
 from __future__ import annotations
 
@@ -15,7 +16,11 @@ from PySide6.QtWidgets import QApplication
 from .convert import convert_files
 from .radial import RadialMenu
 from .tools_ui import (
+    AddBgDialog,
+    AnnotateImageDialog,
     CropImageDialog,
+    EditImageDialog,
+    RedactImageDialog,
     execute_collage,
     execute_compress,
     execute_create_pdf,
@@ -50,7 +55,7 @@ class TangerineApp(QObject):
         self.radial_menu.file_dropped.connect(self._on_files_dropped)
         self.radial_menu.tool_triggered.connect(self._on_tool_triggered)
 
-        # 2. Detector de Shift + Drag
+        # 2. Detector inteligente de Shift + Drag (Sólo en Explorador/Escritorio)
         self.watcher = DragShiftWatcher(
             is_menu_visible=self.radial_menu.isVisible,
             has_menu_drag=lambda: self.radial_menu.has_drag,
@@ -89,32 +94,47 @@ class TangerineApp(QObject):
         self.thread_pool.start(task)
 
     def _on_tool_triggered(self, tool_name: str, paths: List[str]):
-        """Manejo de herramientas avanzadas (Crop, Compress, Collage, Create PDF, Metadata)."""
-        name = tool_name.upper().strip()
-        
+        """Manejo de herramientas avanzadas interactivas y automáticas."""
+        name = tool_name.upper().replace("TO ", "").strip()
+
         if name == "CROP" and paths:
-            # Abrir ventana de recorte interactiva Crop Image
             dialog = CropImageDialog(paths[0])
             dialog.exec()
-            
+
+        elif name == "EDIT" and paths:
+            dialog = EditImageDialog(paths[0])
+            dialog.exec()
+
+        elif name in ("ADD BG", "ADDBG", "BACKGROUND") and paths:
+            dialog = AddBgDialog(paths[0])
+            dialog.exec()
+
+        elif name == "REDACT" and paths:
+            dialog = RedactImageDialog(paths[0])
+            dialog.exec()
+
+        elif name == "ANNOTATE" and paths:
+            dialog = AnnotateImageDialog(paths[0])
+            dialog.exec()
+
         elif name == "COMPRESS":
             task = ActionTask(execute_compress, paths)
             self.thread_pool.start(task)
-            
+
         elif name == "CREATE PDF":
             task = ActionTask(execute_create_pdf, paths)
             self.thread_pool.start(task)
-            
+
         elif name == "COLLAGE":
             task = ActionTask(execute_collage, paths)
             self.thread_pool.start(task)
-            
+
         elif name == "METADATA":
             task = ActionTask(execute_metadata_strip, paths)
             self.thread_pool.start(task)
-            
+
         else:
-            # Fallback a conversión estándar
+            # Fallback seguro a conversión de formato normal
             task = ActionTask(convert_files, paths, tool_name)
             self.thread_pool.start(task)
 

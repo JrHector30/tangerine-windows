@@ -289,10 +289,12 @@ class RadialMenu(QWidget):
             event.accept()
             self.close_menu()
             
-            # Si es una herramienta de ajustes (p.ej. Crop, Compress, Collage, Create PDF, Metadata)
-            if self.current_ring_name in ("pdf_tools", "image_tools") or chosen_item in (
-                "CROP", "COMPRESS", "COLLAGE", "CREATE PDF", "METADATA", "ADD BG", "EDIT", "ANNOTATE", "REDACT"
-            ):
+            item_key = chosen_item.upper().replace("TO ", "").strip()
+            KNOWN_TOOLS = {
+                "CROP", "COMPRESS", "COLLAGE", "CREATE PDF", "METADATA",
+                "ADD BG", "ADDBG", "EDIT", "ANNOTATE", "REDACT"
+            }
+            if self.current_ring_name in ("pdf_tools", "image_tools") or item_key in KNOWN_TOOLS:
                 self.tool_triggered.emit(chosen_item, paths_to_process)
             else:
                 self.file_dropped.emit(paths_to_process, chosen_item)
@@ -323,7 +325,12 @@ class RadialMenu(QWidget):
             if self.file_paths:
                 paths = list(self.file_paths)
                 self.close_menu()
-                if self.current_ring_name != "main" or chosen_item in ("CROP", "COMPRESS", "COLLAGE", "CREATE PDF", "METADATA"):
+                item_key = chosen_item.upper().replace("TO ", "").strip()
+                KNOWN_TOOLS = {
+                    "CROP", "COMPRESS", "COLLAGE", "CREATE PDF", "METADATA",
+                    "ADD BG", "ADDBG", "EDIT", "ANNOTATE", "REDACT"
+                }
+                if self.current_ring_name != "main" or item_key in KNOWN_TOOLS:
                     self.tool_triggered.emit(chosen_item, paths)
                 else:
                     self.file_dropped.emit(paths, chosen_item)
