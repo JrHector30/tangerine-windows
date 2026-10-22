@@ -1,5 +1,5 @@
 """
-Sistema de iconos vectoriales minimalistas y fuentes para Tangerine Windows.
+Sistema de iconos vectoriales minimalistas y fuentes para Lime Radial Windows.
 Dibuja iconos vectoriales con QPainterPath en alta resolución.
 """
 from __future__ import annotations

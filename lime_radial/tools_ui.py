@@ -1,5 +1,5 @@
 """
-Herramientas avanzadas interactivas con Glassmorphism auténtico para Tangerine Windows.
+Herramientas avanzadas interactivas con Glassmorphism auténtico para Lime Radial Windows.
 - CropImageDialog: Con W y H calculados en PX en tiempo real, recuadro libre, selector de aspect ratio y botón de cierre circular.
 - EditImageDialog: Ajustes de brillo, contraste, saturación, rotación y volteo.
 - AddBgDialog: Fondos elegantes con degradados.
@@ -258,12 +258,12 @@ class CropView(QWidget):
         painter.setPen(Qt.NoPen)
         painter.drawPath(outer_p.subtracted(inner_p))
 
-        # Marco del recorte en Naranja Tangerine
+        # Marco del recorte en Naranja Ámbar
         painter.setPen(QPen(QColor(255, 102, 0), 2))
         painter.setBrush(Qt.NoBrush)
         painter.drawRect(crop_rect)
 
-        # Esquinas gruesas naranjas idénticas a Tangerine
+        # Esquinas gruesas de guía en naranja vibrante
         corner_w = 16
         pen_c = QPen(QColor(255, 95, 15), 4, Qt.SolidLine, Qt.SquareCap)
         painter.setPen(pen_c)
@@ -677,7 +677,7 @@ class EditImageDialog(QDialog):
 # -------------------------------------------------------------
 class AddBgDialog(QDialog):
     GRADIENTS = [
-        ("Tangerine Sunset", (255, 102, 0), (255, 179, 71)),
+        ("Golden Sunset", (255, 102, 0), (255, 179, 71)),
         ("Midnight Purple", (43, 24, 78), (111, 44, 145)),
         ("Ocean Blue", (15, 32, 67), (40, 116, 166)),
         ("Clean Slate", (30, 32, 36), (60, 64, 72)),
@@ -1172,7 +1172,7 @@ def execute_compress(paths: List[str]):
             else:
                 im.save(out_path, "JPEG", optimize=True, progressive=True, quality=78)
         except Exception as e:
-            print("[Tangerine Compress Error]:", e)
+            print("[LimeRadial Compress Error]:", e)
 
 
 def execute_create_pdf(paths: List[str]):
@@ -1248,4 +1248,4 @@ def execute_metadata_strip(paths: List[str]):
                 counter += 1
             clean_im.save(out_file)
         except Exception as e:
-            print("[Tangerine Metadata Error]:", e)
+            print("[LimeRadial Metadata Error]:", e)

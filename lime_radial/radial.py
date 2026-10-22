@@ -1,5 +1,5 @@
 """
-Menú radial flotante de ultra alta fidelidad para Tangerine Windows.
+Menú radial flotante de ultra alta fidelidad para Lime Radial Windows.
 Implementa:
 - Auténtico Glassmorphism con bordes especulares y brillo ámbar/vidrio esmerilado.
 - Tipografía moderna Plus Jakarta Sans.
@@ -389,8 +389,8 @@ class RadialMenu(QWidget):
         # Colores Glassmorphic
         COLOR_WEDGE_GLASS = QColor(36, 32, 28, 225)           # Vidrio oscuro con tinte ámbar
         COLOR_WEDGE_BORDER = QColor(90, 80, 70, 160)          # Borde suave translúcido
-        COLOR_TANGERINE_ORANGE = QColor(255, 96, 14, 255)     # Naranja Tangerine vibrante
-        COLOR_TANGERINE_BORDER = QColor(255, 165, 80, 255)    # Borde iluminado
+        COLOR_ACTIVE_ACCENT = QColor(255, 96, 14, 255)        # Resaltado naranja ámbar activo
+        COLOR_ACTIVE_BORDER = QColor(255, 165, 80, 255)       # Borde iluminado
         COLOR_TEXT_NORMAL = QColor(240, 238, 235)
         COLOR_TEXT_ACTIVE = QColor(255, 255, 255)
 
@@ -412,9 +412,9 @@ class RadialMenu(QWidget):
             if is_active:
                 active_grad = QLinearGradient(cx, cy - self.wedge_outer_r, cx, cy + self.wedge_outer_r)
                 active_grad.setColorAt(0.0, QColor(255, 115, 25))
-                active_grad.setColorAt(1.0, COLOR_TANGERINE_ORANGE)
+                active_grad.setColorAt(1.0, COLOR_ACTIVE_ACCENT)
                 painter.setBrush(QBrush(active_grad))
-                painter.setPen(QPen(COLOR_TANGERINE_BORDER, 1.6))
+                painter.setPen(QPen(COLOR_ACTIVE_BORDER, 1.6))
             else:
                 painter.setBrush(QBrush(COLOR_WEDGE_GLASS))
                 painter.setPen(QPen(COLOR_WEDGE_BORDER, 1.0))

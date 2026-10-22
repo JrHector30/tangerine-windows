@@ -1,5 +1,5 @@
 """
-Motor de conversión de formatos local y de alta velocidad para Tangerine Windows.
+Motor de conversión de formatos local y de alta velocidad para Lime Radial Windows.
 Soporta Imágenes, Documentos de Office (Word, Excel, PPT), PDF, Audio y Video.
 """
 from __future__ import annotations
@@ -106,7 +106,7 @@ VIDEO_FORMATS = [
     "To Aac",
 ]
 
-# Exacto como Tangerine macOS para Word/Excel/PPT:
+# Opciones para documentos Word/Excel/PPT:
 # Sólo JPG y PNG para imágenes, y el resto PDF, TXT, MD, HTML, EPUB, PAGES
 DOCUMENT_FORMATS = ["PDF", "TXT", "MD", "HTML", "EPUB", "PAGES", "JPG", "PNG"]
 
