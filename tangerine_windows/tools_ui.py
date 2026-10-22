@@ -1,11 +1,10 @@
 """
-Herramientas avanzadas interactivas con Glassmorphism para Tangerine Windows:
-- CropImageDialog: Recorte libre y manual arrastrando esquinas/bordes o el recuadro completo.
+Herramientas avanzadas interactivas con Glassmorphism auténtico para Tangerine Windows.
+- CropImageDialog: Con W y H calculados en PX en tiempo real, recuadro libre, selector de aspect ratio y botón de cierre circular.
 - EditImageDialog: Ajustes de brillo, contraste, saturación, rotación y volteo.
-- AddBgDialog: Fondos elegantes acolchados con degradados y bordes redondeados.
-- RedactImageDialog: Ocultación/censura de información sensible mediante cuadros negros o difuminado.
-- AnnotateImageDialog: Anotaciones con flechas, rectángulos y lápiz.
-- Funciones rápidas: Compress, Create PDF, Collage, Metadata Strip.
+- AddBgDialog: Fondos elegantes con degradados.
+- RedactImageDialog: Censura interactiva de datos.
+- AnnotateImageDialog: Dibujo y notas sobre la imagen.
 """
 from __future__ import annotations
 
@@ -14,13 +13,14 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
-from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt
+from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
     QCursor,
     QFont,
     QImage,
+    QIntValidator,
     QLinearGradient,
     QPainter,
     QPainterPath,
@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QSlider,
     QVBoxLayout,
@@ -42,10 +43,10 @@ from .icons import FONT_FAMILY
 
 
 # -------------------------------------------------------------
-# 1. CROP VIEW & DIALOG (Recorte Manual Libre)
+# 1. CROP VIEW & DIALOG (W y H en PX y Recorte Libre)
 # -------------------------------------------------------------
 class CropView(QWidget):
-    """Área interactiva para mover y redimensionar el recorte con el ratón."""
+    crop_size_changed = Signal(int, int)
 
     def __init__(self, image_path: Path, parent=None):
         super().__init__(parent)
@@ -54,10 +55,9 @@ class CropView(QWidget):
         self.pil_img = ImageOps.exif_transpose(self.pil_img)
         self.orig_w, self.orig_h = self.pil_img.size
 
-        # Convertir a QImage
         self.qimg = QImage(str(image_path))
-        self.aspect_ratio: Optional[float] = None  # None = Free
-        self.crop_norm = QRectF(0.1, 0.1, 0.8, 0.8)  # Normalizado 0..1
+        self.aspect_ratio: Optional[float] = None
+        self.crop_norm = QRectF(0.08, 0.08, 0.84, 0.84)
 
         self._active_handle: Optional[str] = None
         self._drag_start_pos = QPointF()
@@ -82,11 +82,25 @@ class CropView(QWidget):
 
             self.crop_norm = QRectF(cx - nw / 2, cy - nh / 2, nw, nh)
             self._clamp_norm()
+        self._notify_size()
+        self.update()
+
+    def set_pixel_size(self, w_px: int, h_px: int):
+        """Permite fijar dimensiones exactas en píxeles desde las cajas de texto W y H."""
+        w_px = max(20, min(w_px, self.orig_w))
+        h_px = max(20, min(h_px, self.orig_h))
+        nw = w_px / self.orig_w
+        nh = h_px / self.orig_h
+        cx, cy = self.crop_norm.center().x(), self.crop_norm.center().y()
+        self.crop_norm = QRectF(cx - nw / 2, cy - nh / 2, nw, nh)
+        self._clamp_norm()
+        self._notify_size()
         self.update()
 
     def reset_crop(self):
         self.aspect_ratio = None
         self.crop_norm = QRectF(0.05, 0.05, 0.90, 0.90)
+        self._notify_size()
         self.update()
 
     def _get_display_geometry(self) -> Tuple[QRectF, QRectF]:
@@ -106,11 +120,15 @@ class CropView(QWidget):
         )
         return img_rect, crop_rect
 
+    def _notify_size(self):
+        w_px = int(round(self.crop_norm.width() * self.orig_w))
+        h_px = int(round(self.crop_norm.height() * self.orig_h))
+        self.crop_size_changed.emit(w_px, h_px)
+
     def _hit_test_handles(self, pos: QPointF, crop_rect: QRectF) -> Optional[str]:
-        threshold = 12.0
+        threshold = 14.0
         x, y = pos.x(), pos.y()
         cl, ct, cr, cb = crop_rect.left(), crop_rect.top(), crop_rect.right(), crop_rect.bottom()
-        cx, cy = crop_rect.center().x(), crop_rect.center().y()
 
         if math.hypot(x - cl, y - ct) <= threshold:
             return "TL"
@@ -172,7 +190,6 @@ class CropView(QWidget):
                     nb = max(nb + dy, nt + 0.05)
 
                 if self.aspect_ratio is not None:
-                    # Ajustar según aspecto bloqueado
                     img_aspect = self.orig_w / self.orig_h
                     desired_norm_aspect = self.aspect_ratio / img_aspect
                     curr_w = nr - nl
@@ -184,6 +201,7 @@ class CropView(QWidget):
 
             self.crop_norm = QRectF(nl, nt, nr - nl, nb - nt)
             self._clamp_norm()
+            self._notify_size()
             self.update()
         else:
             handle = self._hit_test_handles(pos, crop_rect)
@@ -228,10 +246,10 @@ class CropView(QWidget):
 
         img_rect, crop_rect = self._get_display_geometry()
 
-        # Dibujar imagen base
+        # Imagen base
         painter.drawImage(img_rect, self.qimg)
 
-        # Máscara de oscurecimiento
+        # Máscara de oscurecimiento exterior
         outer_p = QPainterPath()
         outer_p.addRect(img_rect)
         inner_p = QPainterPath()
@@ -240,27 +258,38 @@ class CropView(QWidget):
         painter.setPen(Qt.NoPen)
         painter.drawPath(outer_p.subtracted(inner_p))
 
-        # Marco de recorte en Naranja Tangerine
+        # Marco del recorte en Naranja Tangerine
         painter.setPen(QPen(QColor(255, 102, 0), 2))
         painter.setBrush(Qt.NoBrush)
         painter.drawRect(crop_rect)
 
-        # Tiradores en las esquinas y centros
-        handle_size = 8
-        painter.setBrush(QColor(255, 120, 20))
-        painter.setPen(QPen(QColor(255, 255, 255), 1.5))
+        # Esquinas gruesas naranjas idénticas a Tangerine
+        corner_w = 16
+        pen_c = QPen(QColor(255, 95, 15), 4, Qt.SolidLine, Qt.SquareCap)
+        painter.setPen(pen_c)
 
-        for pt in [
-            crop_rect.topLeft(),
-            crop_rect.topRight(),
-            crop_rect.bottomLeft(),
-            crop_rect.bottomRight(),
-            QPointF(crop_rect.center().x(), crop_rect.top()),
-            QPointF(crop_rect.center().x(), crop_rect.bottom()),
-            QPointF(crop_rect.left(), crop_rect.center().y()),
-            QPointF(crop_rect.right(), crop_rect.center().y()),
-        ]:
-            painter.drawRect(QRectF(pt.x() - handle_size / 2, pt.y() - handle_size / 2, handle_size, handle_size))
+        cl, ct, cr, cb = crop_rect.left(), crop_rect.top(), crop_rect.right(), crop_rect.bottom()
+        # TL
+        painter.drawLine(cl, ct, cl + corner_w, ct)
+        painter.drawLine(cl, ct, cl, ct + corner_w)
+        # TR
+        painter.drawLine(cr, ct, cr - corner_w, ct)
+        painter.drawLine(cr, ct, cr, ct + corner_w)
+        # BL
+        painter.drawLine(cl, cb, cl + corner_w, cb)
+        painter.drawLine(cl, cb, cl, cb - corner_w)
+        # BR
+        painter.drawLine(cr, cb, cr - corner_w, cb)
+        painter.drawLine(cr, cb, cr, cb - corner_w)
+
+        # Píldoras centrales en bordes
+        mid_x, mid_y = crop_rect.center().x(), crop_rect.center().y()
+        painter.setBrush(QColor(255, 95, 15))
+        painter.setPen(Qt.NoPen)
+        painter.drawRoundedRect(QRectF(mid_x - 8, ct - 2.5, 16, 5), 2.5, 2.5)
+        painter.drawRoundedRect(QRectF(mid_x - 8, cb - 2.5, 16, 5), 2.5, 2.5)
+        painter.drawRoundedRect(QRectF(cl - 2.5, mid_y - 8, 5, 16), 2.5, 2.5)
+        painter.drawRoundedRect(QRectF(cr - 2.5, mid_y - 8, 5, 16), 2.5, 2.5)
 
 
 class CropImageDialog(QDialog):
@@ -270,63 +299,93 @@ class CropImageDialog(QDialog):
         self.setWindowTitle("Crop Image")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.resize(540, 620)
+        self.resize(540, 680)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
 
+        # Tarjeta Glassmorphic cálida idéntica al video/captura
         card = QWidget(self)
         card.setObjectName("glassCard")
         card.setStyleSheet(f"""
             QWidget#glassCard {{
-                background-color: rgba(30, 27, 24, 0.95);
-                border: 1px solid rgba(255, 160, 80, 0.25);
-                border-radius: 20px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(255, 185, 60, 0.94),
+                    stop:1 rgba(255, 130, 35, 0.96));
+                border: 1.5px solid rgba(255, 255, 255, 0.45);
+                border-radius: 26px;
             }}
-            QLabel {{ color: #FFFFFF; font-family: "{FONT_FAMILY}"; }}
+            QLabel {{ color: #2B1D0E; font-family: "{FONT_FAMILY}"; }}
             QPushButton {{
                 font-family: "{FONT_FAMILY}";
                 font-weight: bold;
-                border-radius: 8px;
+                border-radius: 9px;
                 padding: 6px 14px;
-                background-color: rgba(60, 56, 52, 0.8);
-                color: #E0E0E0;
-                border: 1px solid rgba(100, 95, 90, 0.5);
+                background-color: rgba(255, 255, 255, 0.25);
+                color: #26170A;
+                border: 1px solid rgba(255, 255, 255, 0.35);
             }}
-            QPushButton:hover {{ background-color: rgba(80, 75, 70, 0.9); color: #FFFFFF; }}
-            QPushButton:checked {{ background-color: #FF6600; color: #FFFFFF; border: 1px solid #FFA040; }}
+            QPushButton:hover {{ background-color: rgba(255, 255, 255, 0.4); color: #000; }}
+            QPushButton:checked {{
+                background-color: #FF5A00;
+                color: #FFFFFF;
+                border: 1px solid #FFA040;
+            }}
+            QLineEdit {{
+                background-color: rgba(255, 255, 255, 0.92);
+                color: #20150B;
+                font-family: "{FONT_FAMILY}";
+                font-weight: bold;
+                border: 1px solid rgba(180, 100, 30, 0.3);
+                border-radius: 7px;
+                padding: 4px 8px;
+                font-size: 11pt;
+            }}
         """)
 
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(20, 16, 20, 18)
+        card_layout.setContentsMargins(22, 16, 22, 20)
         card_layout.setSpacing(12)
 
-        # Barra superior
+        # Barra superior con botón circular de cierre '✕'
         top_bar = QHBoxLayout()
         close_btn = QPushButton("✕")
-        close_btn.setFixedSize(28, 28)
-        close_btn.setStyleSheet("background: transparent; border: none; font-size: 14px; color: #888;")
+        close_btn.setFixedSize(30, 30)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(0, 0, 0, 0.12);
+                border: 1px solid rgba(255, 255, 255, 0.25);
+                border-radius: 15px;
+                font-size: 13px;
+                font-weight: bold;
+                color: #3B2410;
+            }
+            QPushButton:hover {
+                background-color: rgba(0, 0, 0, 0.22);
+                color: #000;
+            }
+        """)
         close_btn.clicked.connect(self.reject)
 
-        title = QLabel("Crop Image (Recorte Libre)")
-        title.setFont(QFont(FONT_FAMILY, 13, QFont.Bold))
+        title = QLabel("Crop Image")
+        title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
+
         top_bar.addWidget(close_btn)
         top_bar.addWidget(title, 1)
-        top_bar.addSpacing(28)
+        top_bar.addSpacing(30)
         card_layout.addLayout(top_bar)
 
-        # Vista interactiva
+        # Vista de corte interactiva
         self.crop_view = CropView(self.image_path, self)
         card_layout.addWidget(self.crop_view, 1)
 
-        # Barra de Aspect Ratio
+        # Fila 1: Aspect Ratio
         ratio_bar = QHBoxLayout()
-        lbl = QLabel("Aspect ratio:")
-        lbl.setFont(QFont(FONT_FAMILY, 9, QFont.Bold))
-        lbl.setStyleSheet("color: #AAA;")
-        ratio_bar.addWidget(lbl)
-        ratio_bar.addSpacing(6)
+        lbl_ratio = QLabel("Aspect ratio")
+        lbl_ratio.setFont(QFont(FONT_FAMILY, 10, QFont.Bold))
+        ratio_bar.addWidget(lbl_ratio)
+        ratio_bar.addSpacing(8)
 
         self.btn_group = QButtonGroup(self)
         for name, val in [
@@ -347,24 +406,55 @@ class CropImageDialog(QDialog):
         ratio_bar.addStretch()
         card_layout.addLayout(ratio_bar)
 
-        # Botones inferiores
+        # Fila 2: W y H calculados en PX en tiempo real
+        dim_bar = QHBoxLayout()
+        w_lbl = QLabel("W")
+        w_lbl.setFont(QFont(FONT_FAMILY, 10, QFont.Bold))
+        self.w_input = QLineEdit()
+        self.w_input.setFixedWidth(80)
+        self.w_input.setValidator(QIntValidator(10, 20000, self))
+
+        h_lbl = QLabel("H")
+        h_lbl.setFont(QFont(FONT_FAMILY, 10, QFont.Bold))
+        self.h_input = QLineEdit()
+        self.h_input.setFixedWidth(80)
+        self.h_input.setValidator(QIntValidator(10, 20000, self))
+
+        px_lbl = QLabel("px")
+        px_lbl.setFont(QFont(FONT_FAMILY, 10, QFont.Bold))
+
+        dim_bar.addWidget(w_lbl)
+        dim_bar.addWidget(self.w_input)
+        dim_bar.addSpacing(12)
+        dim_bar.addWidget(h_lbl)
+        dim_bar.addWidget(self.h_input)
+        dim_bar.addWidget(px_lbl)
+        dim_bar.addStretch()
+        card_layout.addLayout(dim_bar)
+
+        # Conectar tamaño en tiempo real
+        self.crop_view.crop_size_changed.connect(self._on_crop_size_changed)
+        self.w_input.returnPressed.connect(self._on_manual_dimension_entered)
+        self.h_input.returnPressed.connect(self._on_manual_dimension_entered)
+
+        # Fila 3: Botones inferiores (Reset y Apply)
         bot_bar = QHBoxLayout()
         reset_btn = QPushButton("Reset")
+        reset_btn.setFixedWidth(95)
         reset_btn.clicked.connect(self.crop_view.reset_crop)
-        reset_btn.setFixedWidth(90)
 
         apply_btn = QPushButton("Apply")
-        apply_btn.setFixedWidth(110)
+        apply_btn.setFixedWidth(115)
         apply_btn.setStyleSheet("""
             QPushButton {
-                background-color: #FF6600;
+                background-color: #FF5A00;
                 color: #FFFFFF;
                 border: 1px solid #FFA040;
                 font-size: 11pt;
-                padding: 8px;
-                border-radius: 9px;
+                padding: 9px;
+                border-radius: 10px;
             }
-            QPushButton:hover { background-color: #FF7711; }
+            QPushButton:hover { background-color: #FF6C0A; }
         """)
         apply_btn.clicked.connect(self._on_apply)
 
@@ -374,6 +464,19 @@ class CropImageDialog(QDialog):
         card_layout.addLayout(bot_bar)
 
         root.addWidget(card)
+        self.crop_view._notify_size()
+
+    def _on_crop_size_changed(self, w: int, h: int):
+        self.w_input.setText(str(w))
+        self.h_input.setText(str(h))
+
+    def _on_manual_dimension_entered(self):
+        try:
+            w = int(self.w_input.text())
+            h = int(self.h_input.text())
+            self.crop_view.set_pixel_size(w, h)
+        except Exception:
+            pass
 
     def _on_apply(self):
         cropped = self.crop_view.get_cropped_image()
@@ -391,7 +494,7 @@ class CropImageDialog(QDialog):
 
 
 # -------------------------------------------------------------
-# 2. EDIT IMAGE DIALOG (Brillo, Contraste, Saturación, Rotación)
+# 2. EDIT IMAGE DIALOG
 # -------------------------------------------------------------
 class EditImageDialog(QDialog):
     def __init__(self, image_path: str, parent=None):
@@ -404,7 +507,7 @@ class EditImageDialog(QDialog):
         self.setWindowTitle("Edit Image")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.resize(540, 640)
+        self.resize(540, 660)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
@@ -413,57 +516,65 @@ class EditImageDialog(QDialog):
         card.setObjectName("glassCard")
         card.setStyleSheet(f"""
             QWidget#glassCard {{
-                background-color: rgba(30, 27, 24, 0.95);
-                border: 1px solid rgba(255, 160, 80, 0.25);
-                border-radius: 20px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(255, 185, 60, 0.94),
+                    stop:1 rgba(255, 130, 35, 0.96));
+                border: 1.5px solid rgba(255, 255, 255, 0.45);
+                border-radius: 26px;
             }}
-            QLabel {{ color: #FFFFFF; font-family: "{FONT_FAMILY}"; }}
+            QLabel {{ color: #2B1D0E; font-family: "{FONT_FAMILY}"; }}
             QPushButton {{
                 font-family: "{FONT_FAMILY}";
                 font-weight: bold;
-                border-radius: 8px;
+                border-radius: 9px;
                 padding: 6px 14px;
-                background-color: rgba(60, 56, 52, 0.8);
-                color: #E0E0E0;
-                border: 1px solid rgba(100, 95, 90, 0.5);
+                background-color: rgba(255, 255, 255, 0.25);
+                color: #26170A;
+                border: 1px solid rgba(255, 255, 255, 0.35);
             }}
-            QPushButton:hover {{ background-color: rgba(80, 75, 70, 0.9); color: #FFFFFF; }}
-            QSlider::groove:horizontal {{ height: 6px; background: #3E3B37; border-radius: 3px; }}
-            QSlider::sub-page:horizontal {{ background: #FF6600; border-radius: 3px; }}
-            QSlider::handle:horizontal {{ background: #FFFFFF; width: 16px; margin-top: -5px; margin-bottom: -5px; border-radius: 8px; }}
+            QPushButton:hover {{ background-color: rgba(255, 255, 255, 0.4); }}
+            QSlider::groove:horizontal {{ height: 6px; background: rgba(0, 0, 0, 0.15); border-radius: 3px; }}
+            QSlider::sub-page:horizontal {{ background: #FF5A00; border-radius: 3px; }}
+            QSlider::handle:horizontal {{ background: #FFFFFF; width: 16px; margin: -5px 0; border-radius: 8px; }}
         """)
 
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(20, 16, 20, 18)
+        card_layout.setContentsMargins(22, 16, 22, 20)
         card_layout.setSpacing(12)
 
-        # Header
         top_bar = QHBoxLayout()
         close_btn = QPushButton("✕")
-        close_btn.setFixedSize(28, 28)
-        close_btn.setStyleSheet("background: transparent; border: none; font-size: 14px; color: #888;")
+        close_btn.setFixedSize(30, 30)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(0, 0, 0, 0.12);
+                border: 1px solid rgba(255, 255, 255, 0.25);
+                border-radius: 15px;
+                font-size: 13px;
+                font-weight: bold;
+                color: #3B2410;
+            }
+            QPushButton:hover { background-color: rgba(0, 0, 0, 0.22); color: #000; }
+        """)
         close_btn.clicked.connect(self.reject)
 
         title = QLabel("Edit Image")
-        title.setFont(QFont(FONT_FAMILY, 13, QFont.Bold))
+        title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
         top_bar.addWidget(close_btn)
         top_bar.addWidget(title, 1)
-        top_bar.addSpacing(28)
+        top_bar.addSpacing(30)
         card_layout.addLayout(top_bar)
 
-        # Preview
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setMinimumHeight(280)
         card_layout.addWidget(self.preview_label, 1)
 
-        # Sliders
         self.slider_bright = self._make_slider_row("Brightness", card_layout)
         self.slider_contrast = self._make_slider_row("Contrast", card_layout)
         self.slider_saturation = self._make_slider_row("Saturation", card_layout)
 
-        # Botones de Rotación y Volteo
         rot_bar = QHBoxLayout()
         btn_rot = QPushButton("Rotar 90° ⟳")
         btn_rot.clicked.connect(self._on_rotate)
@@ -474,15 +585,14 @@ class EditImageDialog(QDialog):
         rot_bar.addStretch()
         card_layout.addLayout(rot_bar)
 
-        # Botones inferiores
         bot_bar = QHBoxLayout()
         reset_btn = QPushButton("Reset")
+        reset_btn.setFixedWidth(95)
         reset_btn.clicked.connect(self._on_reset)
-        reset_btn.setFixedWidth(90)
 
         apply_btn = QPushButton("Apply")
-        apply_btn.setFixedWidth(110)
-        apply_btn.setStyleSheet("background-color: #FF6600; color: #FFF; border: 1px solid #FFA040; padding: 8px; border-radius: 9px;")
+        apply_btn.setFixedWidth(115)
+        apply_btn.setStyleSheet("background-color: #FF5A00; color: #FFF; border: 1px solid #FFA040; padding: 9px; border-radius: 10px;")
         apply_btn.clicked.connect(self._on_apply)
 
         bot_bar.addWidget(reset_btn)
@@ -497,7 +607,7 @@ class EditImageDialog(QDialog):
         row = QHBoxLayout()
         lbl = QLabel(name)
         lbl.setFixedWidth(90)
-        lbl.setFont(QFont(FONT_FAMILY, 9, QFont.Bold))
+        lbl.setFont(QFont(FONT_FAMILY, 10, QFont.Bold))
         slider = QSlider(Qt.Horizontal)
         slider.setRange(-50, 50)
         slider.setValue(0)
@@ -527,15 +637,12 @@ class EditImageDialog(QDialog):
         if self.rotation_deg != 0:
             im = im.rotate(self.rotation_deg, expand=True)
 
-        # Brillo
         b_val = 1.0 + (self.slider_bright.value() / 50.0)
         im = ImageEnhance.Brightness(im).enhance(b_val)
 
-        # Contraste
         c_val = 1.0 + (self.slider_contrast.value() / 50.0)
         im = ImageEnhance.Contrast(im).enhance(c_val)
 
-        # Saturación
         s_val = 1.0 + (self.slider_saturation.value() / 50.0)
         im = ImageEnhance.Color(im).enhance(s_val)
         return im
@@ -544,7 +651,6 @@ class EditImageDialog(QDialog):
         im = self._get_processed_image()
         thumb = im.copy()
         thumb.thumbnail((440, 280))
-        # Convertir a QPixmap
         if thumb.mode != "RGBA":
             thumb = thumb.convert("RGBA")
         data = thumb.tobytes("raw", "RGBA")
@@ -567,7 +673,7 @@ class EditImageDialog(QDialog):
 
 
 # -------------------------------------------------------------
-# 3. ADD BG DIALOG (Fondo Padded con Degradado y Sombra)
+# 3. ADD BG DIALOG
 # -------------------------------------------------------------
 class AddBgDialog(QDialog):
     GRADIENTS = [
@@ -583,12 +689,11 @@ class AddBgDialog(QDialog):
         self.pil_img = Image.open(self.image_path)
         self.pil_img = ImageOps.exif_transpose(self.pil_img)
         self.selected_grad_idx = 0
-        self.padding = 60
 
         self.setWindowTitle("Add Background")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.resize(520, 600)
+        self.resize(520, 620)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
@@ -597,50 +702,59 @@ class AddBgDialog(QDialog):
         card.setObjectName("glassCard")
         card.setStyleSheet(f"""
             QWidget#glassCard {{
-                background-color: rgba(30, 27, 24, 0.95);
-                border: 1px solid rgba(255, 160, 80, 0.25);
-                border-radius: 20px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(255, 185, 60, 0.94),
+                    stop:1 rgba(255, 130, 35, 0.96));
+                border: 1.5px solid rgba(255, 255, 255, 0.45);
+                border-radius: 26px;
             }}
-            QLabel {{ color: #FFFFFF; font-family: "{FONT_FAMILY}"; }}
+            QLabel {{ color: #2B1D0E; font-family: "{FONT_FAMILY}"; }}
             QPushButton {{
                 font-family: "{FONT_FAMILY}";
                 font-weight: bold;
-                border-radius: 8px;
+                border-radius: 9px;
                 padding: 6px 14px;
-                background-color: rgba(60, 56, 52, 0.8);
-                color: #E0E0E0;
-                border: 1px solid rgba(100, 95, 90, 0.5);
+                background-color: rgba(255, 255, 255, 0.25);
+                color: #26170A;
+                border: 1px solid rgba(255, 255, 255, 0.35);
             }}
-            QPushButton:hover {{ background-color: rgba(80, 75, 70, 0.9); color: #FFFFFF; }}
-            QPushButton:checked {{ background-color: #FF6600; color: #FFFFFF; border: 1px solid #FFA040; }}
+            QPushButton:hover {{ background-color: rgba(255, 255, 255, 0.4); }}
+            QPushButton:checked {{ background-color: #FF5A00; color: #FFFFFF; border: 1px solid #FFA040; }}
         """)
 
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(20, 16, 20, 18)
+        card_layout.setContentsMargins(22, 16, 22, 20)
         card_layout.setSpacing(12)
 
-        # Header
         top_bar = QHBoxLayout()
         close_btn = QPushButton("✕")
-        close_btn.setFixedSize(28, 28)
-        close_btn.setStyleSheet("background: transparent; border: none; font-size: 14px; color: #888;")
+        close_btn.setFixedSize(30, 30)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(0, 0, 0, 0.12);
+                border: 1px solid rgba(255, 255, 255, 0.25);
+                border-radius: 15px;
+                font-size: 13px;
+                font-weight: bold;
+                color: #3B2410;
+            }
+            QPushButton:hover { background-color: rgba(0, 0, 0, 0.22); color: #000; }
+        """)
         close_btn.clicked.connect(self.reject)
 
         title = QLabel("Add Background (Marco Profesional)")
-        title.setFont(QFont(FONT_FAMILY, 13, QFont.Bold))
+        title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
         top_bar.addWidget(close_btn)
         top_bar.addWidget(title, 1)
-        top_bar.addSpacing(28)
+        top_bar.addSpacing(30)
         card_layout.addLayout(top_bar)
 
-        # Preview
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setMinimumHeight(280)
         card_layout.addWidget(self.preview_label, 1)
 
-        # Selector de tema
         grad_bar = QHBoxLayout()
         for idx, (name, _, _) in enumerate(self.GRADIENTS):
             btn = QPushButton(name.split()[0])
@@ -651,11 +765,10 @@ class AddBgDialog(QDialog):
             grad_bar.addWidget(btn)
         card_layout.addLayout(grad_bar)
 
-        # Botones inferiores
         bot_bar = QHBoxLayout()
         apply_btn = QPushButton("Apply")
-        apply_btn.setFixedWidth(110)
-        apply_btn.setStyleSheet("background-color: #FF6600; color: #FFF; border: 1px solid #FFA040; padding: 8px; border-radius: 9px;")
+        apply_btn.setFixedWidth(115)
+        apply_btn.setStyleSheet("background-color: #FF5A00; color: #FFF; border: 1px solid #FFA040; padding: 9px; border-radius: 10px;")
         apply_btn.clicked.connect(self._on_apply)
         bot_bar.addStretch()
         bot_bar.addWidget(apply_btn)
@@ -669,13 +782,11 @@ class AddBgDialog(QDialog):
         self._update_preview()
 
     def _render_composed_image(self) -> Image.Image:
-        _, c1, c2 = self.GRADIENTS[self.selected_grad_idx]
+        _, c1, _ = self.GRADIENTS[self.selected_grad_idx]
         pad = 80
         w = self.pil_img.width + pad * 2
         h = self.pil_img.height + pad * 2
-
         bg = Image.new("RGBA", (w, h), c1)
-        # Sombra suave sobre imagen
         inner = self.pil_img.convert("RGBA")
         bg.paste(inner, (pad, pad), inner)
         return bg
@@ -701,7 +812,7 @@ class AddBgDialog(QDialog):
 
 
 # -------------------------------------------------------------
-# 4. REDACT IMAGE DIALOG (Censurar con Rectángulos o Difuminado)
+# 4. REDACT IMAGE DIALOG
 # -------------------------------------------------------------
 class RedactView(QWidget):
     def __init__(self, image_path: Path, parent=None):
@@ -770,7 +881,6 @@ class RedactView(QWidget):
 
         painter.drawImage(img_rect, self.qimg)
 
-        # Dibujar rectángulos censurados
         painter.setBrush(QColor(0, 0, 0, 240))
         painter.setPen(QPen(QColor(255, 80, 80), 1.5))
         for r in self.rects_norm:
@@ -780,11 +890,10 @@ class RedactView(QWidget):
             rh = r.height() * disp_h
             painter.drawRect(QRectF(rx, ry, rw, rh))
 
-        # Dibujar cuadro actual en arrastre
         if self._drag_start and self._curr_pos:
             curr_rect = QRectF(self._drag_start, self._curr_pos).normalized()
             painter.setBrush(QColor(0, 0, 0, 180))
-            painter.setPen(QPen(QColor(255, 102, 0), 2, Qt.DashLine))
+            painter.setPen(QPen(QColor(255, 90, 0), 2, Qt.DashLine))
             painter.drawRect(curr_rect)
 
 
@@ -795,7 +904,7 @@ class RedactImageDialog(QDialog):
         self.setWindowTitle("Redact Information")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.resize(540, 600)
+        self.resize(540, 620)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
@@ -804,51 +913,61 @@ class RedactImageDialog(QDialog):
         card.setObjectName("glassCard")
         card.setStyleSheet(f"""
             QWidget#glassCard {{
-                background-color: rgba(30, 27, 24, 0.95);
-                border: 1px solid rgba(255, 160, 80, 0.25);
-                border-radius: 20px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(255, 185, 60, 0.94),
+                    stop:1 rgba(255, 130, 35, 0.96));
+                border: 1.5px solid rgba(255, 255, 255, 0.45);
+                border-radius: 26px;
             }}
-            QLabel {{ color: #FFFFFF; font-family: "{FONT_FAMILY}"; }}
+            QLabel {{ color: #2B1D0E; font-family: "{FONT_FAMILY}"; }}
             QPushButton {{
                 font-family: "{FONT_FAMILY}";
                 font-weight: bold;
-                border-radius: 8px;
+                border-radius: 9px;
                 padding: 6px 14px;
-                background-color: rgba(60, 56, 52, 0.8);
-                color: #E0E0E0;
-                border: 1px solid rgba(100, 95, 90, 0.5);
+                background-color: rgba(255, 255, 255, 0.25);
+                color: #26170A;
+                border: 1px solid rgba(255, 255, 255, 0.35);
             }}
-            QPushButton:hover {{ background-color: rgba(80, 75, 70, 0.9); color: #FFFFFF; }}
+            QPushButton:hover {{ background-color: rgba(255, 255, 255, 0.4); }}
         """)
 
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(20, 16, 20, 18)
+        card_layout.setContentsMargins(22, 16, 22, 20)
         card_layout.setSpacing(12)
 
-        # Header
         top_bar = QHBoxLayout()
         close_btn = QPushButton("✕")
-        close_btn.setFixedSize(28, 28)
-        close_btn.setStyleSheet("background: transparent; border: none; font-size: 14px; color: #888;")
+        close_btn.setFixedSize(30, 30)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(0, 0, 0, 0.12);
+                border: 1px solid rgba(255, 255, 255, 0.25);
+                border-radius: 15px;
+                font-size: 13px;
+                font-weight: bold;
+                color: #3B2410;
+            }
+            QPushButton:hover { background-color: rgba(0, 0, 0, 0.22); color: #000; }
+        """)
         close_btn.clicked.connect(self.reject)
 
-        title = QLabel("Redact (Arrastra para censurar texto/datos)")
-        title.setFont(QFont(FONT_FAMILY, 12, QFont.Bold))
+        title = QLabel("Redact (Censurar Datos)")
+        title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
         top_bar.addWidget(close_btn)
         top_bar.addWidget(title, 1)
-        top_bar.addSpacing(28)
+        top_bar.addSpacing(30)
         card_layout.addLayout(top_bar)
 
         self.view = RedactView(self.image_path, self)
         card_layout.addWidget(self.view, 1)
 
-        # Botones inferiores
         bot_bar = QHBoxLayout()
         clear_btn = QPushButton("Limpiar")
         clear_btn.clicked.connect(self.view.clear_redactions)
         apply_btn = QPushButton("Apply")
-        apply_btn.setStyleSheet("background-color: #FF6600; color: #FFF; border: 1px solid #FFA040; padding: 8px 18px; border-radius: 9px;")
+        apply_btn.setStyleSheet("background-color: #FF5A00; color: #FFF; border: 1px solid #FFA040; padding: 9px 18px; border-radius: 10px;")
         apply_btn.clicked.connect(self._on_apply)
 
         bot_bar.addWidget(clear_btn)
@@ -872,7 +991,7 @@ class RedactImageDialog(QDialog):
 
 
 # -------------------------------------------------------------
-# 5. ANNOTATE IMAGE DIALOG (Dibujar Flechas, Cajas y Notas)
+# 5. ANNOTATE IMAGE DIALOG
 # -------------------------------------------------------------
 class AnnotateView(QWidget):
     def __init__(self, image_path: Path, parent=None):
@@ -921,7 +1040,7 @@ class AnnotateView(QWidget):
                 iy = (pt.y() - disp_y) / scale
                 coords.append((ix, iy))
             if len(coords) >= 2:
-                draw.line(coords, fill=(255, 102, 0), width=4)
+                draw.line(coords, fill=(255, 90, 0), width=4)
         return im
 
     def paintEvent(self, event):
@@ -935,8 +1054,7 @@ class AnnotateView(QWidget):
 
         painter.drawImage(img_rect, self.qimg)
 
-        # Dibujar trazos
-        pen = QPen(QColor(255, 102, 0), 3.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        pen = QPen(QColor(255, 90, 0), 3.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
         painter.setPen(pen)
 
         for line in self.lines + ([self._curr_line] if self._curr_line else []):
@@ -951,7 +1069,7 @@ class AnnotateImageDialog(QDialog):
         self.setWindowTitle("Annotate Image")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.resize(540, 600)
+        self.resize(540, 620)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
@@ -960,39 +1078,51 @@ class AnnotateImageDialog(QDialog):
         card.setObjectName("glassCard")
         card.setStyleSheet(f"""
             QWidget#glassCard {{
-                background-color: rgba(30, 27, 24, 0.95);
-                border: 1px solid rgba(255, 160, 80, 0.25);
-                border-radius: 20px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(255, 185, 60, 0.94),
+                    stop:1 rgba(255, 130, 35, 0.96));
+                border: 1.5px solid rgba(255, 255, 255, 0.45);
+                border-radius: 26px;
             }}
-            QLabel {{ color: #FFFFFF; font-family: "{FONT_FAMILY}"; }}
+            QLabel {{ color: #2B1D0E; font-family: "{FONT_FAMILY}"; }}
             QPushButton {{
                 font-family: "{FONT_FAMILY}";
                 font-weight: bold;
-                border-radius: 8px;
+                border-radius: 9px;
                 padding: 6px 14px;
-                background-color: rgba(60, 56, 52, 0.8);
-                color: #E0E0E0;
-                border: 1px solid rgba(100, 95, 90, 0.5);
+                background-color: rgba(255, 255, 255, 0.25);
+                color: #26170A;
+                border: 1px solid rgba(255, 255, 255, 0.35);
             }}
-            QPushButton:hover {{ background-color: rgba(80, 75, 70, 0.9); color: #FFFFFF; }}
+            QPushButton:hover {{ background-color: rgba(255, 255, 255, 0.4); }}
         """)
 
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(20, 16, 20, 18)
+        card_layout.setContentsMargins(22, 16, 22, 20)
         card_layout.setSpacing(12)
 
         top_bar = QHBoxLayout()
         close_btn = QPushButton("✕")
-        close_btn.setFixedSize(28, 28)
-        close_btn.setStyleSheet("background: transparent; border: none; font-size: 14px; color: #888;")
+        close_btn.setFixedSize(30, 30)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(0, 0, 0, 0.12);
+                border: 1px solid rgba(255, 255, 255, 0.25);
+                border-radius: 15px;
+                font-size: 13px;
+                font-weight: bold;
+                color: #3B2410;
+            }
+            QPushButton:hover { background-color: rgba(0, 0, 0, 0.22); color: #000; }
+        """)
         close_btn.clicked.connect(self.reject)
 
         title = QLabel("Annotate (Dibuja sobre la imagen)")
-        title.setFont(QFont(FONT_FAMILY, 12, QFont.Bold))
+        title.setFont(QFont(FONT_FAMILY, 14, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
         top_bar.addWidget(close_btn)
         top_bar.addWidget(title, 1)
-        top_bar.addSpacing(28)
+        top_bar.addSpacing(30)
         card_layout.addLayout(top_bar)
 
         self.view = AnnotateView(self.image_path, self)
@@ -1002,7 +1132,7 @@ class AnnotateImageDialog(QDialog):
         clear_btn = QPushButton("Borrar")
         clear_btn.clicked.connect(self.view.clear)
         apply_btn = QPushButton("Apply")
-        apply_btn.setStyleSheet("background-color: #FF6600; color: #FFF; border: 1px solid #FFA040; padding: 8px 18px; border-radius: 9px;")
+        apply_btn.setStyleSheet("background-color: #FF5A00; color: #FFF; border: 1px solid #FFA040; padding: 9px 18px; border-radius: 10px;")
         apply_btn.clicked.connect(self._on_apply)
 
         bot_bar.addWidget(clear_btn)
@@ -1029,7 +1159,6 @@ class AnnotateImageDialog(QDialog):
 # 6. HERRAMIENTAS RÁPIDAS
 # -------------------------------------------------------------
 def execute_compress(paths: List[str]):
-    """Comprime imágenes optimizando calidad para reducir 50-70% el tamaño."""
     for p in paths:
         path = Path(p)
         if not path.is_file():
@@ -1047,7 +1176,6 @@ def execute_compress(paths: List[str]):
 
 
 def execute_create_pdf(paths: List[str]):
-    """Combina múltiples imágenes en un único PDF."""
     images = []
     for p in paths:
         path = Path(p)
@@ -1069,7 +1197,6 @@ def execute_create_pdf(paths: List[str]):
 
 
 def execute_collage(paths: List[str]):
-    """Crea una cuadrícula/mosaico automático con las imágenes seleccionadas."""
     images = []
     for p in paths:
         path = Path(p)
@@ -1105,7 +1232,6 @@ def execute_collage(paths: List[str]):
 
 
 def execute_metadata_strip(paths: List[str]):
-    """Limpia metadatos EXIF / GPS sin alterar la extensión ni la calidad."""
     for p in paths:
         path = Path(p)
         if not path.is_file():
