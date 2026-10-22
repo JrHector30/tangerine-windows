@@ -1,10 +1,11 @@
 """
 Menú radial flotante de ultra alta fidelidad para Lime Radial Windows.
 Implementa:
-- Auténtico Glassmorphism con bordes especulares y brillo ámbar/vidrio esmerilado.
+- Gajos / pétalos orgánicos con esquinas redondeadas (fillets Bezier G2) que eliminan puntas afiladas.
+- Auténtico Glassmorphism con bordes especulares y sombreado suave de profundidad (idéntico a Image 3).
 - Tipografía moderna Plus Jakarta Sans.
 - Iconos vectoriales minimalistas en cada herramienta.
-- Cápsula central flotante que cambia dinámicamente al formato/herramienta seleccionada (p.ej. 'JPG', '1.2 MB', 'CROP').
+- Cápsula central flotante que cambia dinámicamente al formato o acción seleccionada (p.ej. 'Convert to BMP', 'Redact Photo', '1.2 MB').
 - Sub-menús radiales automáticos al mantener el cursor sobre 'PDF', 'TIFF' o herramientas avanzadas.
 """
 from __future__ import annotations
@@ -51,24 +52,100 @@ def clock_to_cartesian(cx: float, cy: float, radius: float, clock_deg: float) ->
     return QPointF(cx + radius * math.sin(rad), cy - radius * math.cos(rad))
 
 
-def make_wedge_path(
+def make_rounded_petal(
     cx: float,
     cy: float,
     r_in: float,
     r_out: float,
-    clock_start_deg: float,
-    clock_sweep_deg: float,
+    clock_mid: float,
+    clock_span: float,
+    corner_r: float,
 ) -> QPainterPath:
+    """
+    Construye un pétalo anular suave con todas sus esquinas redondeadas
+    utilizando curvas Bezier continuas para un aspecto orgánico moderno.
+    """
+    half_span = clock_span / 2.0
+    th1 = clock_mid - half_span
+    th2 = clock_mid + half_span
+    
+    dr = r_out - r_in
+    r_c = min(corner_r, dr / 2.4)
+    
+    r_out_c = max(1.0, r_out - r_c)
+    d_th_out = math.degrees(math.asin(min(0.99, r_c / r_out_c)))
+    
+    r_in_c = r_in + r_c
+    d_th_in = math.degrees(math.asin(min(0.99, r_c / r_in_c)))
+    
+    max_d_th = half_span * 0.88
+    if d_th_out > max_d_th:
+        d_th_out = max_d_th
+    if d_th_in > max_d_th:
+        d_th_in = max_d_th
+        
+    def pt(r: float, deg: float) -> QPointF:
+        rad = math.radians(deg)
+        return QPointF(cx + r * math.sin(rad), cy - r * math.cos(rad))
+        
     path = QPainterPath()
+    
+    # Ángulos para arcTo en Qt: 0 deg está a las 3 en punto, antihorario.
+    # clock_deg: 0 deg a las 12 en punto, horario.
+    # qt_deg = 90.0 - clock_deg
+    qt_out_start = 90.0 - (th1 + d_th_out)
+    qt_out_sweep = -(clock_span - 2 * d_th_out)
+    
     outer_rect = QRectF(cx - r_out, cy - r_out, 2 * r_out, 2 * r_out)
     inner_rect = QRectF(cx - r_in, cy - r_in, 2 * r_in, 2 * r_in)
     
-    qt_start = 90.0 - clock_start_deg
-    qt_sweep = -clock_sweep_deg
+    p_out_start = pt(r_out, th1 + d_th_out)
+    path.moveTo(p_out_start)
     
-    path.arcMoveTo(outer_rect, qt_start)
-    path.arcTo(outer_rect, qt_start, qt_sweep)
-    path.arcTo(inner_rect, qt_start + qt_sweep, -qt_sweep)
+    # 1. Arco exterior
+    path.arcTo(outer_rect, qt_out_start, qt_out_sweep)
+    
+    # 2. Esquina superior derecha (th2)
+    p_v_tr = pt(r_out, th2)
+    p_tr_rad = pt(r_out - r_c, th2)
+    k = 0.552
+    c1 = pt(r_out, th2 - d_th_out) + (p_v_tr - pt(r_out, th2 - d_th_out)) * k
+    c2 = p_tr_rad + (p_v_tr - p_tr_rad) * k
+    path.cubicTo(c1, c2, p_tr_rad)
+    
+    # 3. Línea radial hacia el interior
+    p_br_rad = pt(r_in + r_c, th2)
+    path.lineTo(p_br_rad)
+    
+    # 4. Esquina inferior derecha (th2)
+    p_v_br = pt(r_in, th2)
+    p_in_end = pt(r_in, th2 - d_th_in)
+    c1 = p_br_rad + (p_v_br - p_br_rad) * k
+    c2 = p_in_end + (p_v_br - p_in_end) * k
+    path.cubicTo(c1, c2, p_in_end)
+    
+    # 5. Arco interior hacia el inicio
+    qt_in_start = 90.0 - (th2 - d_th_in)
+    qt_in_sweep = clock_span - 2 * d_th_in
+    path.arcTo(inner_rect, qt_in_start, qt_in_sweep)
+    
+    # 6. Esquina inferior izquierda (th1)
+    p_v_bl = pt(r_in, th1)
+    p_bl_rad = pt(r_in + r_c, th1)
+    c1 = pt(r_in, th1 + d_th_in) + (p_v_bl - pt(r_in, th1 + d_th_in)) * k
+    c2 = p_bl_rad + (p_v_bl - p_bl_rad) * k
+    path.cubicTo(c1, c2, p_bl_rad)
+    
+    # 7. Línea radial hacia el exterior
+    p_tl_rad = pt(r_out - r_c, th1)
+    path.lineTo(p_tl_rad)
+    
+    # 8. Esquina superior izquierda (th1)
+    p_v_tl = pt(r_out, th1)
+    c1 = p_tl_rad + (p_v_tl - p_tl_rad) * k
+    c2 = p_out_start + (p_v_tl - p_out_start) * k
+    path.cubicTo(c1, c2, p_out_start)
+    
     path.closeSubpath()
     return path
 
@@ -78,7 +155,7 @@ class RadialMenu(QWidget):
     tool_triggered = Signal(str, list)
     menu_closed = Signal()
 
-    def __init__(self, size: int = 380, parent: Optional[QWidget] = None):
+    def __init__(self, size: int = 390, parent: Optional[QWidget] = None):
         super().__init__(parent)
         load_custom_fonts()
 
@@ -100,8 +177,8 @@ class RadialMenu(QWidget):
 
         # Estado del Menú
         self.file_paths: List[str] = []
-        self.current_ring_name: str = "main"  # 'main', 'pdf_tools', 'image_tools'
-        self.formats: List[str] = ["JPEG", "WebP", "HEIC", "TIFF", "BMP", "GIF", "PDF", "PNG"]
+        self.current_ring_name: str = "main"
+        self.formats: List[str] = ["JPG", "PNG", "WebP", "HEIC", "TIFF", "AVIF", "BMP", "PDF"]
         self.hover_index: int = -1
         self.has_drag: bool = False
         self.scale_factor: float = 1.0
@@ -109,14 +186,14 @@ class RadialMenu(QWidget):
         # Temporizador para transición a sub-menú (Dwell time)
         self._dwell_timer = QTimer(self)
         self._dwell_timer.setSingleShot(True)
-        self._dwell_timer.setInterval(420)  # 420 ms quieto abre el sub-menú
+        self._dwell_timer.setInterval(380)  # 380 ms de reposo abre el sub-menú
         self._dwell_timer.timeout.connect(self._on_dwell_timeout)
         self._dwell_target_index: int = -1
 
-        # Animación de resorte
+        # Animación de resorte al abrir
         self._anim = QVariantAnimation(self)
-        self._anim.setDuration(170)
-        self._anim.setStartValue(0.68)
+        self._anim.setDuration(160)
+        self._anim.setStartValue(0.72)
         self._anim.setEndValue(1.0)
         self._anim.setEasingCurve(QEasingCurve.OutBack)
         self._anim.valueChanged.connect(self._on_scale_anim)
@@ -126,15 +203,18 @@ class RadialMenu(QWidget):
     def _update_radii(self):
         n = len(self.formats)
         self.outer_ring_outer_r = self.radius - 8
-        self.outer_ring_inner_r = self.outer_ring_outer_r - 4.5
-        self.wedge_outer_r = self.outer_ring_inner_r - 5.5
+        self.outer_ring_inner_r = self.outer_ring_outer_r - 4.0
+        self.wedge_outer_r = self.outer_ring_inner_r - 6.0
         
         if n >= 10:
-            self.wedge_inner_r = 68.0
-            self.center_hub_r = 58.0
+            self.wedge_inner_r = 72.0
+            self.center_hub_r = 60.0
+        elif n <= 5:
+            self.wedge_inner_r = 60.0
+            self.center_hub_r = 52.0
         else:
-            self.wedge_inner_r = 62.0
-            self.center_hub_r = 54.0
+            self.wedge_inner_r = 66.0
+            self.center_hub_r = 56.0
 
     def _on_scale_anim(self, value):
         self.scale_factor = float(value)
@@ -146,11 +226,10 @@ class RadialMenu(QWidget):
 
         if self.file_paths:
             self.formats = get_available_formats(self.file_paths)
-            # Si hay múltiples imágenes, agregar PDF para permitir abrir submenú collage/create pdf
             if len(self.file_paths) > 1 and "PDF" not in self.formats:
                 self.formats.append("PDF")
         else:
-            self.formats = ["JPEG", "WebP", "HEIC", "TIFF", "BMP", "GIF", "PDF", "PNG"]
+            self.formats = ["JPG", "PNG", "WebP", "HEIC", "TIFF", "AVIF", "BMP", "PDF"]
 
         self._update_radii()
         self.hover_index = -1
@@ -195,12 +274,12 @@ class RadialMenu(QWidget):
         self.update()
 
     def _on_dwell_timeout(self):
-        """Disparado cuando el cursor reposa quieto en un formato con submenú."""
+        """Disparado cuando el cursor reposa en un formato con submenú."""
         if self.current_ring_name == "main" and 0 <= self._dwell_target_index < len(self.formats):
             item = self.formats[self._dwell_target_index].upper()
             if item == "PDF":
                 self.switch_to_ring("pdf_tools")
-            elif item in ("TIFF", "JPEG", "PNG"):
+            elif item in ("TIFF", "JPG", "PNG"):
                 self.switch_to_ring("image_tools")
 
     def _hit_test(self, pos: QPointF) -> int:
@@ -210,11 +289,11 @@ class RadialMenu(QWidget):
         dist = math.hypot(dx, dy)
 
         # Zona de la cápsula central
-        if dist <= self.center_hub_r + 4:
+        if dist <= self.center_hub_r + 2:
             return -2
 
-        # Zona de gajos
-        if self.wedge_inner_r - 6 <= dist <= self.wedge_outer_r + 16 and self.formats:
+        # Zona de pétalos
+        if self.wedge_inner_r - 8 <= dist <= self.wedge_outer_r + 14 and self.formats:
             angle_deg = math.degrees(math.atan2(dx, -dy)) % 360.0
             total = len(self.formats)
             slice_deg = 360.0 / total
@@ -230,14 +309,14 @@ class RadialMenu(QWidget):
             self.hover_index = new_hover
             self._dwell_timer.stop()
 
-            # Si se posa sobre PDF o TIFF en el anillo principal, iniciar temporizador de submenú
+            # Temporizador de submenú para PDF y TIFF
             if self.current_ring_name == "main" and new_hover >= 0:
                 item = self.formats[new_hover].upper()
                 if item in ("PDF", "TIFF"):
                     self._dwell_target_index = new_hover
                     self._dwell_timer.start()
 
-            # Si vuelve al centro estando en un submenú, retornar al menú principal
+            # Volver al menú principal al mover el cursor al centro
             if new_hover == -2 and self.current_ring_name != "main":
                 self.switch_to_ring("main")
 
@@ -339,7 +418,7 @@ class RadialMenu(QWidget):
         else:
             self.close_menu()
 
-    # ------------------ Renderizado Glassmorphic y Especular ------------------
+    # ------------------ Renderizado Glassmorphic y Pétalos Redondeados ------------------
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
@@ -353,76 +432,79 @@ class RadialMenu(QWidget):
         painter.scale(self.scale_factor, self.scale_factor)
         painter.translate(-cx, -cy)
 
-        # 1. Sombra suave de profundidad
-        shadow_rect = QRectF(cx - self.radius + 6, cy - self.radius + 6, (self.radius - 6) * 2, (self.radius - 6) * 2)
+        # 1. Sombra suave circular exterior
+        shadow_rect = QRectF(cx - self.radius + 8, cy - self.radius + 8, (self.radius - 8) * 2, (self.radius - 8) * 2)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(0, 0, 0, 140))
+        painter.setBrush(QColor(0, 0, 0, 85))
         painter.drawEllipse(shadow_rect)
 
-        # 2. Resplandor especular exterior (Glass Specular Rim Light)
+        # 2. Anillo exterior fino translúcido (Specular Rim Light)
+        rim_path = QPainterPath()
+        rim_path.addEllipse(QPointF(cx, cy), self.outer_ring_outer_r, self.outer_ring_outer_r)
+        rim_inner = QPainterPath()
+        rim_inner.addEllipse(QPointF(cx, cy), self.outer_ring_inner_r, self.outer_ring_inner_r)
+        rim_shape = rim_path.subtracted(rim_inner)
+
         rim_grad = QLinearGradient(cx - self.radius, cy - self.radius, cx + self.radius, cy + self.radius)
-        rim_grad.setColorAt(0.0, QColor(255, 220, 180, 110))   # Brillo ámbar cálido en borde superior
-        rim_grad.setColorAt(0.4, QColor(255, 140, 60, 50))
-        rim_grad.setColorAt(1.0, QColor(40, 35, 30, 80))
-
-        outer_ring_path = QPainterPath()
-        outer_ring_path.addEllipse(QPointF(cx, cy), self.outer_ring_outer_r, self.outer_ring_outer_r)
-        outer_ring_inner = QPainterPath()
-        outer_ring_inner.addEllipse(QPointF(cx, cy), self.outer_ring_inner_r, self.outer_ring_inner_r)
-        outer_ring_shape = outer_ring_path.subtracted(outer_ring_inner)
-
-        painter.setPen(Qt.NoPen)
+        rim_grad.setColorAt(0.0, QColor(255, 255, 255, 140))
+        rim_grad.setColorAt(0.5, QColor(255, 140, 40, 50))
+        rim_grad.setColorAt(1.0, QColor(20, 25, 30, 40))
         painter.setBrush(QBrush(rim_grad))
-        painter.drawPath(outer_ring_shape)
+        painter.drawPath(rim_shape)
 
-        # 3. Gajos de Vidrio Esmerilado (Glass Wedges)
+        # 3. Pétalos redondeados (Rounded Petals con Glassmorphism)
         n = len(self.formats)
         slice_deg = 360.0 / n if n > 0 else 360.0
-        gap_deg = 2.2 if n >= 10 else 2.6
+        gap_deg = 4.2 if n <= 6 else (3.6 if n <= 8 else 2.8)
+        corner_r = 15.0 if n <= 6 else (13.5 if n <= 8 else 10.5)
 
         # Tipografía Plus Jakarta Sans
-        font_size = 8.5 if n >= 10 else (9.5 if n >= 6 else 10.5)
+        font_size = 9.0 if n >= 10 else (10.0 if n >= 6 else 11.0)
         label_font = QFont(FONT_FAMILY, int(font_size), QFont.Bold)
-        label_font.setLetterSpacing(QFont.AbsoluteSpacing, 0.4)
+        label_font.setLetterSpacing(QFont.AbsoluteSpacing, 0.3)
         painter.setFont(label_font)
 
-        # Colores Glassmorphic
-        COLOR_WEDGE_GLASS = QColor(36, 32, 28, 225)           # Vidrio oscuro con tinte ámbar
-        COLOR_WEDGE_BORDER = QColor(90, 80, 70, 160)          # Borde suave translúcido
-        COLOR_ACTIVE_ACCENT = QColor(255, 96, 14, 255)        # Resaltado naranja ámbar activo
-        COLOR_ACTIVE_BORDER = QColor(255, 165, 80, 255)       # Borde iluminado
-        COLOR_TEXT_NORMAL = QColor(240, 238, 235)
-        COLOR_TEXT_ACTIVE = QColor(255, 255, 255)
+        # Paleta de color Glassmorphic moderna idéntica a Image 3
+        COLOR_PETAL_BG = QColor(244, 246, 249, 238)          # Vidrio esmerilado claro de alta fidelidad
+        COLOR_PETAL_BORDER = QColor(255, 255, 255, 220)       # Reflejo especular blanco
+        COLOR_PETAL_TEXT = QColor(28, 33, 41)                 # Texto grafito nítido
+        COLOR_ACTIVE_GRAD_TOP = QColor(255, 106, 0)           # Tangerine Orange vibrante
+        COLOR_ACTIVE_GRAD_BOT = QColor(255, 62, 0)
+        COLOR_ACTIVE_BORDER = QColor(255, 185, 110, 240)      # Borde iluminado
+        COLOR_ACTIVE_TEXT = QColor(255, 255, 255)
 
         for i, raw_label in enumerate(self.formats):
             is_active = (self.hover_index == i)
 
             clock_mid_deg = i * slice_deg
-            clock_start_deg = clock_mid_deg - (slice_deg - gap_deg) / 2
-            clock_sweep_deg = slice_deg - gap_deg
+            clock_span_deg = slice_deg - gap_deg
 
-            wedge_path = make_wedge_path(
+            # Expansión sutil táctil al pasar el cursor (+3px)
+            r_out = self.wedge_outer_r + (3.0 if is_active else 0.0)
+            r_in = self.wedge_inner_r
+
+            petal_path = make_rounded_petal(
                 cx, cy,
-                self.wedge_inner_r,
-                self.wedge_outer_r + (4.0 if is_active else 0.0),
-                clock_start_deg,
-                clock_sweep_deg,
+                r_in, r_out,
+                clock_mid_deg,
+                clock_span_deg,
+                corner_r,
             )
 
             if is_active:
-                active_grad = QLinearGradient(cx, cy - self.wedge_outer_r, cx, cy + self.wedge_outer_r)
-                active_grad.setColorAt(0.0, QColor(255, 115, 25))
-                active_grad.setColorAt(1.0, COLOR_ACTIVE_ACCENT)
+                active_grad = QLinearGradient(cx, cy - r_out, cx, cy + r_out)
+                active_grad.setColorAt(0.0, COLOR_ACTIVE_GRAD_TOP)
+                active_grad.setColorAt(1.0, COLOR_ACTIVE_GRAD_BOT)
                 painter.setBrush(QBrush(active_grad))
-                painter.setPen(QPen(COLOR_ACTIVE_BORDER, 1.6))
+                painter.setPen(QPen(COLOR_ACTIVE_BORDER, 1.8))
             else:
-                painter.setBrush(QBrush(COLOR_WEDGE_GLASS))
-                painter.setPen(QPen(COLOR_WEDGE_BORDER, 1.0))
+                painter.setBrush(QBrush(COLOR_PETAL_BG))
+                painter.setPen(QPen(COLOR_PETAL_BORDER, 1.2))
 
-            painter.drawPath(wedge_path)
+            painter.drawPath(petal_path)
 
-            # Posición del contenido en el gajo
-            label_radius = (self.wedge_inner_r + self.wedge_outer_r) / 2
+            # Posición del texto/icono en el pétalo
+            label_radius = (r_in + r_out) / 2
             label_pos = clock_to_cartesian(cx, cy, label_radius, clock_mid_deg)
 
             has_icon = raw_label.upper() in (
@@ -430,71 +512,92 @@ class RadialMenu(QWidget):
             )
 
             if has_icon:
-                # Dibujar icono minimalista encima y etiqueta debajo
                 icon_center = QPointF(label_pos.x(), label_pos.y() - 7)
                 draw_minimal_icon(
                     painter,
                     raw_label,
                     icon_center,
                     size=16.0,
-                    color=COLOR_TEXT_ACTIVE if is_active else COLOR_TEXT_NORMAL,
+                    color=COLOR_ACTIVE_TEXT if is_active else COLOR_PETAL_TEXT,
                 )
-                text_rect = QRectF(label_pos.x() - 40, label_pos.y() + 3, 80, 16)
-                painter.setPen(COLOR_TEXT_ACTIVE if is_active else COLOR_TEXT_NORMAL)
+                text_rect = QRectF(label_pos.x() - 42, label_pos.y() + 3, 84, 16)
+                painter.setPen(COLOR_ACTIVE_TEXT if is_active else COLOR_PETAL_TEXT)
                 sub_font = QFont(FONT_FAMILY, 8, QFont.Bold)
                 painter.setFont(sub_font)
                 painter.drawText(text_rect, Qt.AlignCenter, raw_label)
                 painter.setFont(label_font)
             else:
-                # Dibujar texto de formato
                 display_text = raw_label
-                if "(low quality)" in display_text.lower():
-                    display_text = display_text.replace("(low quality)", "\n(LQ)").replace("(Low Quality)", "\n(LQ)")
-
-                box_w = 72 if n >= 10 else 78
-                box_h = 32 if "\n" in display_text else 26
+                box_w = 74 if n >= 10 else 82
+                box_h = 28
                 text_rect = QRectF(label_pos.x() - box_w / 2, label_pos.y() - box_h / 2, box_w, box_h)
-                painter.setPen(COLOR_TEXT_ACTIVE if is_active else COLOR_TEXT_NORMAL)
+                painter.setPen(COLOR_ACTIVE_TEXT if is_active else COLOR_PETAL_TEXT)
                 painter.drawText(text_rect, Qt.AlignCenter, display_text)
 
-        # 4. Cápsula Central Flotante (Glass Floating Pill)
-        # La cápsula muestra el formato seleccionado si hay hover, o el peso/archivos si está libre
-        pill_w, pill_h = 96.0, 36.0
+        # 4. Cápsula Central Flotante (Floating Glass Pill)
+        # Muestra dinámicamente la acción ('Convert to BMP', 'Redact Photo') o el peso/archivos
+        pill_w, pill_h = 130.0, 36.0
         pill_rect = QRectF(cx - pill_w / 2, cy - pill_h / 2, pill_w, pill_h)
 
-        # Fondo cápsula con gradiente de vidrio esmerilado
+        # Sombra sutil de la cápsula
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 35))
+        painter.drawRoundedRect(pill_rect.translated(0, 2), 18, 18)
+
+        # Fondo cápsula con cristal esmerilado puro
         capsule_grad = QLinearGradient(pill_rect.topLeft(), pill_rect.bottomRight())
-        capsule_grad.setColorAt(0.0, QColor(48, 42, 36, 240))
-        capsule_grad.setColorAt(1.0, QColor(25, 22, 20, 245))
+        capsule_grad.setColorAt(0.0, QColor(255, 255, 255, 245))
+        capsule_grad.setColorAt(1.0, QColor(242, 245, 248, 245))
 
         painter.setBrush(QBrush(capsule_grad))
-        painter.setPen(QPen(QColor(110, 95, 80, 200), 1.4))
+        painter.setPen(QPen(QColor(220, 226, 234, 220), 1.2))
         painter.drawRoundedRect(pill_rect, 18, 18)
 
-        # Contenido de la cápsula
+        # Texto dentro de la cápsula central
         if 0 <= self.hover_index < len(self.formats):
-            # Mostrar el formato / herramienta seleccionado al pasar el ratón (como en el video!)
-            active_name = self.formats[self.hover_index].replace("To ", "")
-            if "(low quality)" in active_name.lower():
-                active_name = active_name.split()[0] + " (LQ)"
+            raw_active = self.formats[self.hover_index]
+            active_clean = raw_active.replace("To ", "").strip()
+            
+            # Nombre de acción completo como en Tangerine Mac (Image 3)
+            action_name_map = {
+                "BMP": "Convert to BMP",
+                "JPG": "Convert to JPG",
+                "JPEG": "Convert to JPEG",
+                "PNG": "Convert to PNG",
+                "WEBP": "Convert to WebP",
+                "HEIC": "Convert to HEIC",
+                "TIFF": "Convert to TIFF",
+                "AVIF": "Convert to AVIF",
+                "PDF": "PDF Tools" if self.current_ring_name == "main" else "Convert to PDF",
+                "REDACT": "Redact Photo",
+                "CROP": "Crop Image",
+                "EDIT": "Edit Image",
+                "ANNOTATE": "Annotate",
+                "ADD BG": "Add Background",
+                "METADATA": "Metadata",
+                "COMPRESS": "Compress File",
+                "CREATE PDF": "Create PDF",
+                "COLLAGE": "Photo Collage",
+            }
+            display_action = action_name_map.get(active_clean.upper(), f"To {active_clean}")
 
-            capsule_font = QFont(FONT_FAMILY, 11, QFont.Bold)
+            capsule_font = QFont(FONT_FAMILY, 9, QFont.Bold)
             painter.setFont(capsule_font)
-            painter.setPen(QColor(255, 255, 255))
-            painter.drawText(pill_rect, Qt.AlignCenter, active_name)
+            painter.setPen(QColor(26, 32, 40))
+            painter.drawText(pill_rect, Qt.AlignCenter, display_action)
         else:
-            # Mostrar tamaño o cantidad de archivos (p.ej. '1.2 MB' o '4 files')
+            # Mostrar tamaño o cantidad de archivos
             size_str = self._calculate_file_size()
             capsule_font = QFont(FONT_FAMILY, 10, QFont.Bold)
             painter.setFont(capsule_font)
-            painter.setPen(QColor(255, 255, 255))
+            painter.setPen(QColor(26, 32, 40))
             painter.drawText(pill_rect, Qt.AlignCenter, size_str)
 
         painter.restore()
 
     def _calculate_file_size(self) -> str:
         if not self.file_paths:
-            return "4 files"
+            return "1 file"
             
         total_bytes = 0
         valid_count = 0

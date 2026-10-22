@@ -1,6 +1,13 @@
 """
-Motor de conversión de formatos local y de alta velocidad para Lime Radial Windows.
-Soporta Imágenes, Documentos de Office (Word, Excel, PPT), PDF, Audio y Video.
+Motor de conversión de formatos local y de ultra alta velocidad para Lime Radial Windows.
+Alineado con la matriz completa de formatos soportados:
+- Imágenes: JPG, PNG, WebP, HEIC, TIFF, AVIF, BMP, PDF
+- Audio: MP3, M4A, WAV, FLAC, OGG, Opus, AIFF, WMA
+- Video: MP4, MOV, MKV, WebM, AVI, WMV, GIF, MP3
+- PDF: DOCX, PAGES, PPTX, XLSX, JPG, PNG, EPUB, TXT, MD
+- Documentos: PAGES, Markdown, TXT, EPUB, PDF, HTML, JPG, PNG
+- Presentaciones (Slides): PDF, JPG, PNG, TXT, MD
+- Hojas de cálculo: CSV, TSV, PDF, HTML, TXT, MD
 """
 from __future__ import annotations
 
@@ -13,7 +20,7 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 from PIL import Image, ImageOps
 
@@ -71,44 +78,18 @@ VIDEO_EXTENSIONS = {
     ".wmv", ".m4v", ".ogv", ".3gp", ".ts", ".mts"
 }
 
-DOCUMENT_EXTENSIONS = {
-    ".docx", ".doc",
-    ".xlsx", ".xls", ".csv",
-    ".pptx", ".ppt"
-}
+DOCUMENT_EXTENSIONS = {".docx", ".doc", ".pages", ".rtf", ".odt"}
+SLIDE_EXTENSIONS = {".pptx", ".ppt", ".keynote", ".odp"}
+SPREADSHEET_EXTENSIONS = {".xlsx", ".xls", ".numbers", ".csv", ".tsv", ".ods"}
 
-# Formatos según tipo de archivo
-IMAGE_FORMATS = ["JPEG", "PNG", "WebP", "GIF", "BMP", "TIFF", "PDF", "ICO"]
-if HEIF_SUPPORTED:
-    IMAGE_FORMATS.insert(3, "HEIC")
-
-PDF_FORMATS = ["PNG", "JPEG", "DOCX", "TXT"]
-
-AUDIO_FORMATS = [
-    "To Ogg",
-    "To Wav",
-    "To Mp3",
-    "To Aac",
-]
-
-VIDEO_FORMATS = [
-    "To Mkv",
-    "To Mp4",
-    "To Mp4 (low quality)",
-    "To Webm",
-    "To Ogv",
-    "To Avi",
-    "To Gif",
-    "To Gif (low quality)",
-    "To Ogg",
-    "To Wav",
-    "To Mp3",
-    "To Aac",
-]
-
-# Opciones para documentos Word/Excel/PPT:
-# Sólo JPG y PNG para imágenes, y el resto PDF, TXT, MD, HTML, EPUB, PAGES
-DOCUMENT_FORMATS = ["PDF", "TXT", "MD", "HTML", "EPUB", "PAGES", "JPG", "PNG"]
+# Formatos según tipo de archivo (Alineado estrictamente a Supported Formats)
+IMAGE_FORMATS = ["JPG", "PNG", "WebP", "HEIC", "TIFF", "AVIF", "BMP", "PDF"]
+AUDIO_FORMATS = ["MP3", "M4A", "WAV", "FLAC", "OGG", "Opus", "AIFF", "WMA"]
+VIDEO_FORMATS = ["MP4", "MOV", "MKV", "WebM", "AVI", "WMV", "GIF", "MP3"]
+PDF_FORMATS = ["DOCX", "PAGES", "PPTX", "XLSX", "JPG", "PNG", "EPUB", "TXT", "MD"]
+DOCUMENT_FORMATS = ["PAGES", "Markdown", "TXT", "EPUB", "PDF", "HTML", "JPG", "PNG"]
+SLIDE_FORMATS = ["PDF", "JPG", "PNG", "TXT", "MD"]
+SPREADSHEET_FORMATS = ["CSV", "TSV", "PDF", "HTML", "TXT", "MD"]
 
 
 def get_ffmpeg_exe() -> str:
@@ -126,34 +107,45 @@ def get_ffmpeg_exe() -> str:
 def get_available_formats(file_paths: List[str]) -> List[str]:
     """Retorna los formatos destino apropiados según el tipo de archivo arrastrado."""
     if not file_paths:
-        return IMAGE_FORMATS
+        return list(IMAGE_FORMATS)
     
     first_ext = Path(file_paths[0]).suffix.lower()
     
-    # 1. Documentos de Office (Word, Excel, PowerPoint)
-    if first_ext in DOCUMENT_EXTENSIONS:
-        return DOCUMENT_FORMATS
+    # 1. Hojas de cálculo (Excel, Numbers, CSV, TSV)
+    if first_ext in SPREADSHEET_EXTENSIONS:
+        return list(SPREADSHEET_FORMATS)
 
-    # 2. Videos
+    # 2. Presentaciones (PowerPoint, Keynote)
+    if first_ext in SLIDE_EXTENSIONS:
+        return list(SLIDE_FORMATS)
+
+    # 3. Documentos de texto (Word, Pages, RTF)
+    if first_ext in DOCUMENT_EXTENSIONS:
+        return list(DOCUMENT_FORMATS)
+
+    # 4. Videos
     if first_ext in VIDEO_EXTENSIONS:
-        return VIDEO_FORMATS
+        return list(VIDEO_FORMATS)
         
-    # 3. Audios
+    # 5. Audios
     if first_ext in AUDIO_EXTENSIONS:
-        return AUDIO_FORMATS
+        return list(AUDIO_FORMATS)
         
-    # 4. PDFs
+    # 6. PDFs
     if first_ext == ".pdf":
-        return PDF_FORMATS
+        return list(PDF_FORMATS)
         
-    # 5. Imágenes
+    # 7. Imágenes
     if first_ext in IMAGE_EXTENSIONS:
         curr = first_ext.lstrip(".").upper()
-        if curr in ("JPG", "JPEG"):
-            return [f for f in IMAGE_FORMATS if f not in ("JPEG", "JPG")]
-        return [f for f in IMAGE_FORMATS if f.upper() != curr]
+        if curr in ("JPEG", "JPG"):
+            curr = "JPG"
+        fmts = [f for f in IMAGE_FORMATS if f.upper() != curr]
+        if len(file_paths) > 1 and "PDF" not in fmts:
+            fmts.append("PDF")
+        return fmts
         
-    return IMAGE_FORMATS
+    return list(IMAGE_FORMATS)
 
 
 def get_unique_output_path(source_path: Path, target_ext: str) -> Path:
@@ -172,7 +164,7 @@ def get_unique_output_path(source_path: Path, target_ext: str) -> Path:
     return out
 
 
-# ------------------ Conversión de Documentos (Word, Excel, PPT) ------------------
+# ------------------ Conversión de Documentos de Office y Texto ------------------
 def extract_document_text_and_md(path: Path) -> Tuple[str, str, str]:
     """Extrae texto plano, Markdown y contenido HTML estructurado."""
     ext = path.suffix.lower()
@@ -217,10 +209,11 @@ def extract_document_text_and_md(path: Path) -> Tuple[str, str, str]:
             md_lines.extend(table_md)
             plain_text.append("\n".join(table_md))
 
-    elif ext in (".xlsx", ".xls", ".csv"):
-        if ext == ".csv":
+    elif ext in (".xlsx", ".xls", ".csv", ".tsv"):
+        delimiter = "\t" if ext == ".tsv" else ","
+        if ext in (".csv", ".tsv"):
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                reader = csv.reader(f)
+                reader = csv.reader(f, delimiter=delimiter)
                 for row in reader:
                     plain_text.append("\t".join(row))
                     md_lines.append("| " + " | ".join(row) + " |")
@@ -253,6 +246,12 @@ def extract_document_text_and_md(path: Path) -> Tuple[str, str, str]:
                             md_lines.append(f"- {t}")
                             html_parts.append(f"<p>{html.escape(t)}</p>")
             html_parts.append("</div>")
+
+    elif ext in (".txt", ".md"):
+        txt = path.read_text(encoding="utf-8", errors="ignore")
+        plain_text.append(txt)
+        md_lines.append(txt)
+        html_parts.append(f"<pre>{html.escape(txt)}</pre>")
 
     txt_content = "\n".join(plain_text)
     md_content = "\n".join(md_lines)
@@ -350,7 +349,7 @@ def convert_office_to_pdf_native(source_path: Path, out_pdf_path: Path) -> bool:
 
 
 def convert_document(source_file: str | Path, target_format: str) -> List[Path]:
-    """Convierte Word, Excel o PowerPoint a PDF, TXT, MD, HTML, EPUB, PAGES, JPG o PNG."""
+    """Convierte Word, Excel, PowerPoint, CSV, TSV a los formatos objetivo soportados."""
     src = Path(source_file)
     fmt = target_format.upper().replace("TO ", "").strip()
     txt, md, doc_html = extract_document_text_and_md(src)
@@ -361,7 +360,7 @@ def convert_document(source_file: str | Path, target_format: str) -> List[Path]:
         out.write_text(txt, encoding="utf-8")
         outputs.append(out)
 
-    elif fmt == "MD":
+    elif fmt in ("MD", "MARKDOWN"):
         out = get_unique_output_path(src, ".md")
         out.write_text(md, encoding="utf-8")
         outputs.append(out)
@@ -381,10 +380,42 @@ def convert_document(source_file: str | Path, target_format: str) -> List[Path]:
         build_pages_file(src.stem, txt, out)
         outputs.append(out)
 
+    elif fmt == "CSV":
+        out = get_unique_output_path(src, ".csv")
+        # Si es xlsx o tsv, convertir a csv estándar
+        if src.suffix.lower() in (".xlsx", ".xls") and OPENPYXL_SUPPORTED:
+            wb = openpyxl.load_workbook(src, data_only=True)
+            ws = wb.active
+            with open(out, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                for row in ws.iter_rows(values_only=True):
+                    writer.writerow([c if c is not None else "" for c in row])
+        else:
+            with open(out, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                for line in txt.splitlines():
+                    writer.writerow(line.split("\t"))
+        outputs.append(out)
+
+    elif fmt == "TSV":
+        out = get_unique_output_path(src, ".tsv")
+        if src.suffix.lower() in (".xlsx", ".xls") and OPENPYXL_SUPPORTED:
+            wb = openpyxl.load_workbook(src, data_only=True)
+            ws = wb.active
+            with open(out, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f, delimiter="\t")
+                for row in ws.iter_rows(values_only=True):
+                    writer.writerow([c if c is not None else "" for c in row])
+        else:
+            with open(out, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f, delimiter="\t")
+                for line in txt.splitlines():
+                    writer.writerow(line.split(","))
+        outputs.append(out)
+
     elif fmt == "PDF":
         out_pdf = get_unique_output_path(src, ".pdf")
         if not convert_office_to_pdf_native(src, out_pdf):
-            # Fallback a creación de PDF con PyMuPDF
             if PYMUPDF_SUPPORTED:
                 doc = fitz.open()
                 page = doc.new_page(width=595, height=842)  # A4
@@ -395,28 +426,28 @@ def convert_document(source_file: str | Path, target_format: str) -> List[Path]:
         outputs.append(out_pdf)
 
     elif fmt in ("JPG", "JPEG", "PNG"):
-        # Convertir primero a PDF temporal y luego renderizar como imagen
         out_pdf = src.parent / f"_temp_{src.stem}.pdf"
         if not convert_office_to_pdf_native(src, out_pdf):
             if PYMUPDF_SUPPORTED:
                 doc = fitz.open()
                 page = doc.new_page(width=595, height=842)
-                page.insert_textbox(fitz.Rect(50, 50, 545, 792), txt[:15000], fontsize=11)
+                rect = fitz.Rect(50, 50, 545, 792)
+                page.insert_textbox(rect, txt[:15000], fontsize=11, fontname="helv")
                 doc.save(str(out_pdf))
                 doc.close()
-
+        
         if out_pdf.exists() and PYMUPDF_SUPPORTED:
-            doc = fitz.open(out_pdf)
             target_ext = ".jpg" if fmt in ("JPG", "JPEG") else ".png"
-            for p_num in range(min(len(doc), 5)):
-                page = doc.load_page(p_num)
+            doc = fitz.open(out_pdf)
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
                 pix = page.get_pixmap(dpi=200)
                 if len(doc) == 1:
-                    img_out = get_unique_output_path(src, target_ext)
+                    out_img = get_unique_output_path(src, target_ext)
                 else:
-                    img_out = src.parent / f"{src.stem}_p{p_num + 1}{target_ext}"
-                pix.save(str(img_out))
-                outputs.append(img_out)
+                    out_img = get_unique_output_path(src, f"_p{page_num + 1}{target_ext}")
+                pix.save(str(out_img))
+                outputs.append(out_img)
             doc.close()
             try:
                 os.remove(out_pdf)
@@ -450,6 +481,18 @@ def convert_image(source_file: str | Path, target_format: str, quality: int = 92
     source_path = Path(source_file)
     target_fmt = target_format.upper().replace("TO ", "").strip()
     
+    # Soporte especial para AVIF mediante FFmpeg si Pillow no tiene codec nativo
+    if target_fmt == "AVIF":
+        out_path = get_unique_output_path(source_path, ".avif")
+        ffmpeg_exe = get_ffmpeg_exe()
+        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-c:v", "libaom-av1", "-crf", "28", "-still-picture", "1", str(out_path)]
+        try:
+            run_ffmpeg_command(cmd)
+            return out_path
+        except Exception:
+            # Fallback a WebP si no tiene libaom
+            target_fmt = "WEBP"
+
     pil_save_map = {
         "JPEG": "JPEG",
         "JPG": "JPEG",
@@ -490,37 +533,124 @@ def convert_image(source_file: str | Path, target_format: str, quality: int = 92
     return out_path
 
 
-# ------------------ Conversión de PDF ------------------
-def convert_pdf_to_images(source_file: str | Path, target_format: str) -> List[Path]:
+# ------------------ Conversión Universal de PDF ------------------
+def convert_pdf(source_file: str | Path, target_format: str) -> List[Path]:
+    """
+    Convierte un PDF a los formatos solicitados:
+    DOCX, PAGES, PPTX, XLSX, JPG, PNG, EPUB, TXT, MD.
+    """
     if not PYMUPDF_SUPPORTED:
         raise RuntimeError("PyMuPDF no está disponible.")
         
     source_path = Path(source_file)
-    target_fmt = target_format.upper().replace("TO ", "").strip()
-    target_ext = ".jpg" if target_fmt in ("JPEG", "JPG") else ".png"
-    
+    fmt = target_format.upper().replace("TO ", "").strip()
     doc = fitz.open(source_path)
     outputs = []
-    
-    for page_num in range(len(doc)):
-        page = doc.load_page(page_num)
-        pix = page.get_pixmap(dpi=200)
-        
-        if len(doc) == 1:
-            out_file = get_unique_output_path(source_path, target_ext)
-        else:
-            parent = source_path.parent
-            stem = f"{source_path.stem}_p{page_num + 1}"
-            out_file = parent / f"{stem}{target_ext}"
-            counter = 1
-            while out_file.exists():
-                out_file = parent / f"{stem} ({counter}){target_ext}"
-                counter += 1
-                
-        pix.save(str(out_file))
-        outputs.append(out_file)
-        
+
+    # 1. Exportar a imágenes JPG o PNG por página
+    if fmt in ("JPG", "JPEG", "PNG"):
+        target_ext = ".jpg" if fmt in ("JPG", "JPEG") else ".png"
+        for page_num in range(len(doc)):
+            page = doc.load_page(page_num)
+            pix = page.get_pixmap(dpi=200)
+            if len(doc) == 1:
+                out_file = get_unique_output_path(source_path, target_ext)
+            else:
+                out_file = get_unique_output_path(source_path, f"_p{page_num + 1}{target_ext}")
+            pix.save(str(out_file))
+            outputs.append(out_file)
+        doc.close()
+        return outputs
+
+    # Extraer texto y estructura de páginas
+    full_text_list = []
+    html_pages = []
+    for page in doc:
+        full_text_list.append(page.get_text("text"))
+        html_pages.append(page.get_text("html"))
     doc.close()
+
+    full_text = "\n\n".join(full_text_list).strip()
+    full_html = (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'><title>"
+        + html.escape(source_path.stem)
+        + "</title></head><body>"
+        + "".join(html_pages)
+        + "</body></html>"
+    )
+
+    if fmt == "TXT":
+        out = get_unique_output_path(source_path, ".txt")
+        out.write_text(full_text, encoding="utf-8")
+        outputs.append(out)
+
+    elif fmt in ("MD", "MARKDOWN"):
+        out = get_unique_output_path(source_path, ".md")
+        md_text = "\n\n".join(f"# Página {i+1}\n\n{txt.strip()}" for i, txt in enumerate(full_text_list))
+        out.write_text(md_text, encoding="utf-8")
+        outputs.append(out)
+
+    elif fmt == "HTML":
+        out = get_unique_output_path(source_path, ".html")
+        out.write_text(full_html, encoding="utf-8")
+        outputs.append(out)
+
+    elif fmt == "EPUB":
+        out = get_unique_output_path(source_path, ".epub")
+        build_epub_file(source_path.stem, full_html, out)
+        outputs.append(out)
+
+    elif fmt == "PAGES":
+        out = get_unique_output_path(source_path, ".pages")
+        build_pages_file(source_path.stem, full_text, out)
+        outputs.append(out)
+
+    elif fmt == "DOCX" and DOCX_SUPPORTED:
+        out = get_unique_output_path(source_path, ".docx")
+        wdoc = docx.Document()
+        for i, p_txt in enumerate(full_text_list):
+            if len(full_text_list) > 1:
+                wdoc.add_heading(f"Página {i+1}", level=2)
+            for line in p_txt.splitlines():
+                if line.strip():
+                    wdoc.add_paragraph(line.strip())
+        wdoc.save(str(out))
+        outputs.append(out)
+
+    elif fmt == "PPTX" and PPTX_SUPPORTED:
+        out = get_unique_output_path(source_path, ".pptx")
+        prs = pptx.Presentation()
+        for i, p_txt in enumerate(full_text_list):
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            tb = slide.shapes.add_textbox(pptx.util.Inches(0.8), pptx.util.Inches(0.8), pptx.util.Inches(8.4), pptx.util.Inches(5.8))
+            tf = tb.text_frame
+            tf.text = p_txt.strip()
+        prs.save(str(out))
+        outputs.append(out)
+
+    elif fmt == "XLSX" and OPENPYXL_SUPPORTED:
+        out = get_unique_output_path(source_path, ".xlsx")
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Página 1"
+        row_idx = 1
+        for i, p_txt in enumerate(full_text_list):
+            if i > 0:
+                ws = wb.create_sheet(title=f"Página {i+1}")
+                row_idx = 1
+            for line in p_txt.splitlines():
+                if line.strip():
+                    ws.cell(row=row_idx, column=1, value=line.strip())
+                    row_idx += 1
+        wb.save(str(out))
+        outputs.append(out)
+
+    else:
+        # Fallback predeterminado a TXT si el formato es desconocido
+        out = get_unique_output_path(source_path, ".txt")
+        out.write_text(full_text, encoding="utf-8")
+        outputs.append(out)
+
     return outputs
 
 
@@ -548,47 +678,61 @@ def run_ffmpeg_command(cmd_args: List[str]):
 def convert_media(source_file: str | Path, target_format: str) -> Path:
     ffmpeg_exe = get_ffmpeg_exe()
     source_path = Path(source_file)
-    target_key = target_format.strip().lower()
+    fmt = target_format.upper().replace("TO ", "").strip()
     
-    if target_key == "to ogg":
-        out_path = get_unique_output_path(source_path, ".ogg")
-        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-vn", "-c:a", "libvorbis", "-q:a", "5", str(out_path)]
-    elif target_key == "to wav":
-        out_path = get_unique_output_path(source_path, ".wav")
-        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-vn", "-c:a", "pcm_s16le", str(out_path)]
-    elif target_key == "to mp3":
+    # 1. Formatos de Audio
+    if fmt == "MP3":
         out_path = get_unique_output_path(source_path, ".mp3")
         cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-vn", "-c:a", "libmp3lame", "-q:a", "2", str(out_path)]
-    elif target_key == "to aac":
+    elif fmt == "M4A":
+        out_path = get_unique_output_path(source_path, ".m4a")
+        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-vn", "-c:a", "aac", "-b:a", "192k", str(out_path)]
+    elif fmt == "WAV":
+        out_path = get_unique_output_path(source_path, ".wav")
+        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-vn", "-c:a", "pcm_s16le", str(out_path)]
+    elif fmt == "FLAC":
+        out_path = get_unique_output_path(source_path, ".flac")
+        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-vn", "-c:a", "flac", str(out_path)]
+    elif fmt == "OGG":
+        out_path = get_unique_output_path(source_path, ".ogg")
+        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-vn", "-c:a", "libvorbis", "-q:a", "5", str(out_path)]
+    elif fmt == "OPUS":
+        out_path = get_unique_output_path(source_path, ".opus")
+        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-vn", "-c:a", "libopus", "-b:a", "128k", str(out_path)]
+    elif fmt == "AIFF":
+        out_path = get_unique_output_path(source_path, ".aiff")
+        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-vn", "-c:a", "pcm_s16be", str(out_path)]
+    elif fmt == "WMA":
+        out_path = get_unique_output_path(source_path, ".wma")
+        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-vn", "-c:a", "wmav2", "-b:a", "192k", str(out_path)]
+    elif fmt == "AAC":
         out_path = get_unique_output_path(source_path, ".aac")
         cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-vn", "-c:a", "aac", "-b:a", "192k", str(out_path)]
-    elif target_key == "to mkv":
-        out_path = get_unique_output_path(source_path, ".mkv")
-        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-c:v", "libx264", "-preset", "fast", "-crf", "22", "-c:a", "aac", "-b:a", "192k", str(out_path)]
-    elif target_key == "to mp4":
+
+    # 2. Formatos de Video
+    elif fmt == "MP4":
         out_path = get_unique_output_path(source_path, ".mp4")
         cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-c:v", "libx264", "-preset", "fast", "-crf", "22", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out_path)]
-    elif target_key in ("to mp4 (low quality)", "to mp4 (lq)"):
-        out_path = get_unique_output_path(source_path, ".mp4")
-        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-vf", "scale='min(720,iw)':-2", "-c:v", "libx264", "-preset", "fast", "-crf", "28", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(out_path)]
-    elif target_key == "to webm":
+    elif fmt == "MOV":
+        out_path = get_unique_output_path(source_path, ".mov")
+        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-c:v", "libx264", "-preset", "fast", "-crf", "22", "-c:a", "aac", "-b:a", "192k", str(out_path)]
+    elif fmt == "MKV":
+        out_path = get_unique_output_path(source_path, ".mkv")
+        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-c:v", "libx264", "-preset", "fast", "-crf", "22", "-c:a", "aac", "-b:a", "192k", str(out_path)]
+    elif fmt == "WEBM":
         out_path = get_unique_output_path(source_path, ".webm")
         cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", "-c:a", "libopus", str(out_path)]
-    elif target_key == "to ogv":
-        out_path = get_unique_output_path(source_path, ".ogv")
-        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-c:v", "libtheora", "-q:v", "7", "-c:a", "libvorbis", "-q:a", "4", str(out_path)]
-    elif target_key == "to avi":
+    elif fmt == "AVI":
         out_path = get_unique_output_path(source_path, ".avi")
         cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-c:v", "mpeg4", "-q:v", "4", "-c:a", "mp3", str(out_path)]
-    elif target_key == "to gif":
+    elif fmt == "WMV":
+        out_path = get_unique_output_path(source_path, ".wmv")
+        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-c:v", "wmv2", "-b:v", "2M", "-c:a", "wmav2", "-b:a", "192k", str(out_path)]
+    elif fmt == "GIF":
         out_path = get_unique_output_path(source_path, ".gif")
-        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-vf", "fps=15,scale=480:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse", str(out_path)]
-    elif target_key in ("to gif (low quality)", "to gif (lq)"):
-        out_path = get_unique_output_path(source_path, ".gif")
-        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-vf", "fps=10,scale=320:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse", str(out_path)]
+        cmd = [ffmpeg_exe, "-y", "-i", str(source_path), "-vf", "fps=15,scale='min(480,iw)':-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse", str(out_path)]
     else:
-        fmt = target_key.replace("to ", "").split()[0]
-        out_path = get_unique_output_path(source_path, f".{fmt}")
+        out_path = get_unique_output_path(source_path, f".{fmt.lower()}")
         cmd = [ffmpeg_exe, "-y", "-i", str(source_path), str(out_path)]
 
     run_ffmpeg_command(cmd)
@@ -604,12 +748,12 @@ def convert_files(file_paths: List[str], target_format: str) -> List[Path]:
             continue
             
         ext = p.suffix.lower()
-        if ext in DOCUMENT_EXTENSIONS:
+        if ext in SPREADSHEET_EXTENSIONS or ext in SLIDE_EXTENSIONS or ext in DOCUMENT_EXTENSIONS:
             results.extend(convert_document(p, target_format))
         elif ext in VIDEO_EXTENSIONS or ext in AUDIO_EXTENSIONS:
             results.append(convert_media(p, target_format))
         elif ext == ".pdf":
-            results.extend(convert_pdf_to_images(p, target_format))
+            results.extend(convert_pdf(p, target_format))
         else:
             results.append(convert_image(p, target_format))
             

@@ -41,6 +41,104 @@ from PySide6.QtWidgets import (
 
 from .icons import FONT_FAMILY
 
+GLASS_DIALOG_STYLESHEET = f"""
+    QWidget#glassCard {{
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+            stop:0 rgba(22, 26, 34, 0.90),
+            stop:1 rgba(14, 17, 24, 0.94));
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 24px;
+    }}
+    QLabel {{
+        color: #F8FAFC;
+        font-family: "{FONT_FAMILY}";
+    }}
+    QPushButton {{
+        font-family: "{FONT_FAMILY}";
+        font-weight: 600;
+        border-radius: 9px;
+        padding: 6px 14px;
+        background-color: rgba(255, 255, 255, 0.08);
+        color: #E2E8F0;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+    }}
+    QPushButton:hover {{
+        background-color: rgba(255, 255, 255, 0.18);
+        color: #FFFFFF;
+    }}
+    QPushButton:checked {{
+        background-color: #FF5500;
+        color: #FFFFFF;
+        border: 1px solid #FFA040;
+    }}
+    QLineEdit {{
+        background-color: rgba(10, 14, 20, 0.75);
+        color: #FFFFFF;
+        font-family: "{FONT_FAMILY}";
+        font-weight: bold;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        border-radius: 8px;
+        padding: 4px 8px;
+        font-size: 11pt;
+    }}
+    QLineEdit:focus {{
+        border: 1px solid #FF7700;
+        background-color: rgba(10, 14, 20, 0.92);
+    }}
+    QSlider::groove:horizontal {{
+        height: 6px;
+        background: rgba(255, 255, 255, 0.14);
+        border-radius: 3px;
+    }}
+    QSlider::sub-page:horizontal {{
+        background: #FF5500;
+        border-radius: 3px;
+    }}
+    QSlider::handle:horizontal {{
+        background: #FFFFFF;
+        border: 2px solid #FF5500;
+        width: 16px;
+        margin: -5px 0;
+        border-radius: 8px;
+    }}
+    QSlider::handle:horizontal:hover {{
+        background: #FFF0E6;
+        border: 2px solid #FF7722;
+    }}
+"""
+
+CLOSE_BUTTON_STYLESHEET = """
+    QPushButton {
+        background-color: rgba(255, 255, 255, 0.14);
+        border: 1px solid rgba(255, 255, 255, 0.30);
+        border-radius: 15px;
+        font-size: 13px;
+        font-weight: bold;
+        color: #FFFFFF;
+    }
+    QPushButton:hover {
+        background-color: rgba(255, 255, 255, 0.28);
+        color: #FFFFFF;
+    }
+"""
+
+PRIMARY_BUTTON_STYLESHEET = """
+    QPushButton {
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+            stop:0 #FF6A00, stop:1 #FF4200);
+        color: #FFFFFF;
+        font-weight: bold;
+        border: 1px solid rgba(255, 255, 255, 0.30);
+        border-radius: 10px;
+        padding: 8px 20px;
+        font-size: 11pt;
+    }
+    QPushButton:hover {
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+            stop:0 #FF7B1A, stop:1 #FF5500);
+    }
+"""
+
 
 # -------------------------------------------------------------
 # 1. CROP VIEW & DIALOG (W y H en PX y Recorte Libre)
@@ -307,41 +405,7 @@ class CropImageDialog(QDialog):
         # Tarjeta Glassmorphic cálida idéntica al video/captura
         card = QWidget(self)
         card.setObjectName("glassCard")
-        card.setStyleSheet(f"""
-            QWidget#glassCard {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 185, 60, 0.94),
-                    stop:1 rgba(255, 130, 35, 0.96));
-                border: 1.5px solid rgba(255, 255, 255, 0.45);
-                border-radius: 26px;
-            }}
-            QLabel {{ color: #2B1D0E; font-family: "{FONT_FAMILY}"; }}
-            QPushButton {{
-                font-family: "{FONT_FAMILY}";
-                font-weight: bold;
-                border-radius: 9px;
-                padding: 6px 14px;
-                background-color: rgba(255, 255, 255, 0.25);
-                color: #26170A;
-                border: 1px solid rgba(255, 255, 255, 0.35);
-            }}
-            QPushButton:hover {{ background-color: rgba(255, 255, 255, 0.4); color: #000; }}
-            QPushButton:checked {{
-                background-color: #FF5A00;
-                color: #FFFFFF;
-                border: 1px solid #FFA040;
-            }}
-            QLineEdit {{
-                background-color: rgba(255, 255, 255, 0.92);
-                color: #20150B;
-                font-family: "{FONT_FAMILY}";
-                font-weight: bold;
-                border: 1px solid rgba(180, 100, 30, 0.3);
-                border-radius: 7px;
-                padding: 4px 8px;
-                font-size: 11pt;
-            }}
-        """)
+        card.setStyleSheet(GLASS_DIALOG_STYLESHEET)
 
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(22, 16, 22, 20)
@@ -351,20 +415,7 @@ class CropImageDialog(QDialog):
         top_bar = QHBoxLayout()
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(30, 30)
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(0, 0, 0, 0.12);
-                border: 1px solid rgba(255, 255, 255, 0.25);
-                border-radius: 15px;
-                font-size: 13px;
-                font-weight: bold;
-                color: #3B2410;
-            }
-            QPushButton:hover {
-                background-color: rgba(0, 0, 0, 0.22);
-                color: #000;
-            }
-        """)
+        close_btn.setStyleSheet(CLOSE_BUTTON_STYLESHEET)
         close_btn.clicked.connect(self.reject)
 
         title = QLabel("Crop Image")
@@ -445,17 +496,7 @@ class CropImageDialog(QDialog):
 
         apply_btn = QPushButton("Apply")
         apply_btn.setFixedWidth(115)
-        apply_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #FF5A00;
-                color: #FFFFFF;
-                border: 1px solid #FFA040;
-                font-size: 11pt;
-                padding: 9px;
-                border-radius: 10px;
-            }
-            QPushButton:hover { background-color: #FF6C0A; }
-        """)
+        apply_btn.setStyleSheet(PRIMARY_BUTTON_STYLESHEET)
         apply_btn.clicked.connect(self._on_apply)
 
         bot_bar.addWidget(reset_btn)
@@ -514,29 +555,7 @@ class EditImageDialog(QDialog):
 
         card = QWidget(self)
         card.setObjectName("glassCard")
-        card.setStyleSheet(f"""
-            QWidget#glassCard {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 185, 60, 0.94),
-                    stop:1 rgba(255, 130, 35, 0.96));
-                border: 1.5px solid rgba(255, 255, 255, 0.45);
-                border-radius: 26px;
-            }}
-            QLabel {{ color: #2B1D0E; font-family: "{FONT_FAMILY}"; }}
-            QPushButton {{
-                font-family: "{FONT_FAMILY}";
-                font-weight: bold;
-                border-radius: 9px;
-                padding: 6px 14px;
-                background-color: rgba(255, 255, 255, 0.25);
-                color: #26170A;
-                border: 1px solid rgba(255, 255, 255, 0.35);
-            }}
-            QPushButton:hover {{ background-color: rgba(255, 255, 255, 0.4); }}
-            QSlider::groove:horizontal {{ height: 6px; background: rgba(0, 0, 0, 0.15); border-radius: 3px; }}
-            QSlider::sub-page:horizontal {{ background: #FF5A00; border-radius: 3px; }}
-            QSlider::handle:horizontal {{ background: #FFFFFF; width: 16px; margin: -5px 0; border-radius: 8px; }}
-        """)
+        card.setStyleSheet(GLASS_DIALOG_STYLESHEET)
 
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(22, 16, 22, 20)
@@ -545,17 +564,7 @@ class EditImageDialog(QDialog):
         top_bar = QHBoxLayout()
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(30, 30)
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(0, 0, 0, 0.12);
-                border: 1px solid rgba(255, 255, 255, 0.25);
-                border-radius: 15px;
-                font-size: 13px;
-                font-weight: bold;
-                color: #3B2410;
-            }
-            QPushButton:hover { background-color: rgba(0, 0, 0, 0.22); color: #000; }
-        """)
+        close_btn.setStyleSheet(CLOSE_BUTTON_STYLESHEET)
         close_btn.clicked.connect(self.reject)
 
         title = QLabel("Edit Image")
@@ -592,7 +601,7 @@ class EditImageDialog(QDialog):
 
         apply_btn = QPushButton("Apply")
         apply_btn.setFixedWidth(115)
-        apply_btn.setStyleSheet("background-color: #FF5A00; color: #FFF; border: 1px solid #FFA040; padding: 9px; border-radius: 10px;")
+        apply_btn.setStyleSheet(PRIMARY_BUTTON_STYLESHEET)
         apply_btn.clicked.connect(self._on_apply)
 
         bot_bar.addWidget(reset_btn)
@@ -700,27 +709,7 @@ class AddBgDialog(QDialog):
 
         card = QWidget(self)
         card.setObjectName("glassCard")
-        card.setStyleSheet(f"""
-            QWidget#glassCard {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 185, 60, 0.94),
-                    stop:1 rgba(255, 130, 35, 0.96));
-                border: 1.5px solid rgba(255, 255, 255, 0.45);
-                border-radius: 26px;
-            }}
-            QLabel {{ color: #2B1D0E; font-family: "{FONT_FAMILY}"; }}
-            QPushButton {{
-                font-family: "{FONT_FAMILY}";
-                font-weight: bold;
-                border-radius: 9px;
-                padding: 6px 14px;
-                background-color: rgba(255, 255, 255, 0.25);
-                color: #26170A;
-                border: 1px solid rgba(255, 255, 255, 0.35);
-            }}
-            QPushButton:hover {{ background-color: rgba(255, 255, 255, 0.4); }}
-            QPushButton:checked {{ background-color: #FF5A00; color: #FFFFFF; border: 1px solid #FFA040; }}
-        """)
+        card.setStyleSheet(GLASS_DIALOG_STYLESHEET)
 
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(22, 16, 22, 20)
@@ -729,17 +718,7 @@ class AddBgDialog(QDialog):
         top_bar = QHBoxLayout()
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(30, 30)
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(0, 0, 0, 0.12);
-                border: 1px solid rgba(255, 255, 255, 0.25);
-                border-radius: 15px;
-                font-size: 13px;
-                font-weight: bold;
-                color: #3B2410;
-            }
-            QPushButton:hover { background-color: rgba(0, 0, 0, 0.22); color: #000; }
-        """)
+        close_btn.setStyleSheet(CLOSE_BUTTON_STYLESHEET)
         close_btn.clicked.connect(self.reject)
 
         title = QLabel("Add Background (Marco Profesional)")
@@ -768,7 +747,7 @@ class AddBgDialog(QDialog):
         bot_bar = QHBoxLayout()
         apply_btn = QPushButton("Apply")
         apply_btn.setFixedWidth(115)
-        apply_btn.setStyleSheet("background-color: #FF5A00; color: #FFF; border: 1px solid #FFA040; padding: 9px; border-radius: 10px;")
+        apply_btn.setStyleSheet(PRIMARY_BUTTON_STYLESHEET)
         apply_btn.clicked.connect(self._on_apply)
         bot_bar.addStretch()
         bot_bar.addWidget(apply_btn)
@@ -911,26 +890,7 @@ class RedactImageDialog(QDialog):
 
         card = QWidget(self)
         card.setObjectName("glassCard")
-        card.setStyleSheet(f"""
-            QWidget#glassCard {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 185, 60, 0.94),
-                    stop:1 rgba(255, 130, 35, 0.96));
-                border: 1.5px solid rgba(255, 255, 255, 0.45);
-                border-radius: 26px;
-            }}
-            QLabel {{ color: #2B1D0E; font-family: "{FONT_FAMILY}"; }}
-            QPushButton {{
-                font-family: "{FONT_FAMILY}";
-                font-weight: bold;
-                border-radius: 9px;
-                padding: 6px 14px;
-                background-color: rgba(255, 255, 255, 0.25);
-                color: #26170A;
-                border: 1px solid rgba(255, 255, 255, 0.35);
-            }}
-            QPushButton:hover {{ background-color: rgba(255, 255, 255, 0.4); }}
-        """)
+        card.setStyleSheet(GLASS_DIALOG_STYLESHEET)
 
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(22, 16, 22, 20)
@@ -939,17 +899,7 @@ class RedactImageDialog(QDialog):
         top_bar = QHBoxLayout()
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(30, 30)
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(0, 0, 0, 0.12);
-                border: 1px solid rgba(255, 255, 255, 0.25);
-                border-radius: 15px;
-                font-size: 13px;
-                font-weight: bold;
-                color: #3B2410;
-            }
-            QPushButton:hover { background-color: rgba(0, 0, 0, 0.22); color: #000; }
-        """)
+        close_btn.setStyleSheet(CLOSE_BUTTON_STYLESHEET)
         close_btn.clicked.connect(self.reject)
 
         title = QLabel("Redact (Censurar Datos)")
@@ -967,7 +917,7 @@ class RedactImageDialog(QDialog):
         clear_btn = QPushButton("Limpiar")
         clear_btn.clicked.connect(self.view.clear_redactions)
         apply_btn = QPushButton("Apply")
-        apply_btn.setStyleSheet("background-color: #FF5A00; color: #FFF; border: 1px solid #FFA040; padding: 9px 18px; border-radius: 10px;")
+        apply_btn.setStyleSheet(PRIMARY_BUTTON_STYLESHEET)
         apply_btn.clicked.connect(self._on_apply)
 
         bot_bar.addWidget(clear_btn)
@@ -1076,26 +1026,7 @@ class AnnotateImageDialog(QDialog):
 
         card = QWidget(self)
         card.setObjectName("glassCard")
-        card.setStyleSheet(f"""
-            QWidget#glassCard {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 185, 60, 0.94),
-                    stop:1 rgba(255, 130, 35, 0.96));
-                border: 1.5px solid rgba(255, 255, 255, 0.45);
-                border-radius: 26px;
-            }}
-            QLabel {{ color: #2B1D0E; font-family: "{FONT_FAMILY}"; }}
-            QPushButton {{
-                font-family: "{FONT_FAMILY}";
-                font-weight: bold;
-                border-radius: 9px;
-                padding: 6px 14px;
-                background-color: rgba(255, 255, 255, 0.25);
-                color: #26170A;
-                border: 1px solid rgba(255, 255, 255, 0.35);
-            }}
-            QPushButton:hover {{ background-color: rgba(255, 255, 255, 0.4); }}
-        """)
+        card.setStyleSheet(GLASS_DIALOG_STYLESHEET)
 
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(22, 16, 22, 20)
@@ -1104,17 +1035,7 @@ class AnnotateImageDialog(QDialog):
         top_bar = QHBoxLayout()
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(30, 30)
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(0, 0, 0, 0.12);
-                border: 1px solid rgba(255, 255, 255, 0.25);
-                border-radius: 15px;
-                font-size: 13px;
-                font-weight: bold;
-                color: #3B2410;
-            }
-            QPushButton:hover { background-color: rgba(0, 0, 0, 0.22); color: #000; }
-        """)
+        close_btn.setStyleSheet(CLOSE_BUTTON_STYLESHEET)
         close_btn.clicked.connect(self.reject)
 
         title = QLabel("Annotate (Dibuja sobre la imagen)")
@@ -1132,7 +1053,7 @@ class AnnotateImageDialog(QDialog):
         clear_btn = QPushButton("Borrar")
         clear_btn.clicked.connect(self.view.clear)
         apply_btn = QPushButton("Apply")
-        apply_btn.setStyleSheet("background-color: #FF5A00; color: #FFF; border: 1px solid #FFA040; padding: 9px 18px; border-radius: 10px;")
+        apply_btn.setStyleSheet(PRIMARY_BUTTON_STYLESHEET)
         apply_btn.clicked.connect(self._on_apply)
 
         bot_bar.addWidget(clear_btn)
